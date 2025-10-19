@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import clsx from "clsx";
 import "./globals.css";
@@ -46,20 +47,18 @@ export default function RootLayout({
                 </p>
               </div>
               <div className="flex items-center gap-3">
-                <a
-                  href="https://tracefox.ai"
-                  target="_blank"
+                <Link
+                  href="/docs"
                   className="rounded-full border border-slate-700/70 bg-slate-900/60 px-4 py-2 text-xs uppercase tracking-wide text-slate-300 transition hover:border-brand-400/60 hover:text-brand-100"
                 >
                   View Docs
-                </a>
-                <a
-                  href="https://status.tracefox.ai"
-                  target="_blank"
+                </Link>
+                <Link
+                  href="/status"
                   className="rounded-full border border-brand-500/70 bg-brand-500/15 px-4 py-2 text-xs uppercase tracking-wide text-brand-100 shadow-md shadow-brand-900/40 transition hover:bg-brand-500/25"
                 >
                   Platform Status
-                </a>
+                </Link>
               </div>
             </header>
             <main className="flex-1">{children}</main>
