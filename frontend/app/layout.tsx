@@ -10,8 +10,8 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "DevGuardian Control Center",
-  description: "Live outlook of DevGuardian AI pipeline activity.",
+  title: "TraceFox Control Center",
+  description: "Live outlook of TraceFox AI pipeline activity.",
 };
 
 export default function RootLayout({
@@ -34,7 +34,7 @@ export default function RootLayout({
             <header className="mb-10 flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
               <div>
                 <div className="inline-flex items-center gap-2 rounded-full border border-brand-500/40 bg-brand-500/10 px-4 py-1 text-xs uppercase tracking-wider text-brand-100 shadow shadow-brand-900/40">
-                  DevGuardian
+                  TraceFox
                   <span className="text-brand-200">Control Center</span>
                 </div>
                 <h1 className="mt-4 text-3xl font-semibold text-white md:text-4xl">
@@ -47,14 +47,14 @@ export default function RootLayout({
               </div>
               <div className="flex items-center gap-3">
                 <a
-                  href="https://devguardian.ai"
+                  href="https://tracefox.ai"
                   target="_blank"
                   className="rounded-full border border-slate-700/70 bg-slate-900/60 px-4 py-2 text-xs uppercase tracking-wide text-slate-300 transition hover:border-brand-400/60 hover:text-brand-100"
                 >
                   View Docs
                 </a>
                 <a
-                  href="https://status.devguardian.ai"
+                  href="https://status.tracefox.ai"
                   target="_blank"
                   className="rounded-full border border-brand-500/70 bg-brand-500/15 px-4 py-2 text-xs uppercase tracking-wide text-brand-100 shadow-md shadow-brand-900/40 transition hover:bg-brand-500/25"
                 >
@@ -64,7 +64,7 @@ export default function RootLayout({
             </header>
             <main className="flex-1">{children}</main>
             <footer className="mt-12 flex flex-col gap-2 border-t border-slate-800/60 pt-6 text-xs text-slate-500 md:flex-row md:items-center md:justify-between">
-              <p>© {new Date().getFullYear()} DevGuardian Labs. All rights reserved.</p>
+              <p>© {new Date().getFullYear()} TraceFox Labs. All rights reserved.</p>
               <p className="font-mono text-[11px] uppercase tracking-wider text-slate-600">
                 Powered by Krutrim DeepSeek R1 • Intelligent SDLC automation
               </p>
@@ -75,4 +75,3 @@ export default function RootLayout({
     </html>
   );
 }
-
