@@ -11,9 +11,6 @@ SG_IDS=${SG_IDS:?SG_IDS environment variable must be set (JSON array).}
 CPU=${CPU:-512}
 MEMORY=${MEMORY:-1024}
 DESIRED_COUNT=${DESIRED_COUNT:-1}
-KRUTRIM_MODEL=${KRUTRIM_MODEL:-Krutrim-DeepSeek-R1}
-KRUTRIM_API_BASE_URL=${KRUTRIM_API_BASE_URL:-https://api.krutrim.com/v1}
-DEEPSEEK_ROUTER_MODEL=${DEEPSEEK_ROUTER_MODEL:-deepseek-r1}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -31,10 +28,7 @@ CMD=(terraform "${TF_ACTION}" \
   -var="security_group_ids=${SG_IDS}" \
   -var="cpu=${CPU}" \
   -var="memory=${MEMORY}" \
-  -var="desired_count=${DESIRED_COUNT}" \
-  -var="krutrim_model=${KRUTRIM_MODEL}" \
-  -var="krutrim_api_base_url=${KRUTRIM_API_BASE_URL}" \
-  -var="deepseek_router_model=${DEEPSEEK_ROUTER_MODEL}")
+  -var="desired_count=${DESIRED_COUNT}")
 
 if [[ "${TF_AUTO_APPROVE}" == "true" ]]; then
   CMD+=("-auto-approve")
@@ -44,4 +38,4 @@ fi
 
 popd >/dev/null
 
-echo "Terraform ${TF_ACTION} completed for environment ${ENVIRONMENT} in ${AWS_REGION}"
+echo "TraceFox deployment (${TF_ACTION}) completed for environment ${ENVIRONMENT} in ${AWS_REGION}"

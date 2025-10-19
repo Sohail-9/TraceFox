@@ -10,9 +10,6 @@ CPU=${CPU:-0.5}
 MEMORY_GB=${MEMORY_GB:-1.0}
 MIN_REPLICAS=${MIN_REPLICAS:-1}
 MAX_REPLICAS=${MAX_REPLICAS:-3}
-KRUTRIM_MODEL=${KRUTRIM_MODEL:-Krutrim-DeepSeek-R1}
-KRUTRIM_API_BASE_URL=${KRUTRIM_API_BASE_URL:-https://api.krutrim.com/v1}
-DEEPSEEK_ROUTER_MODEL=${DEEPSEEK_ROUTER_MODEL:-deepseek-r1}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -29,10 +26,7 @@ CMD=(terraform "${TF_ACTION}" \
   -var="cpu=${CPU}" \
   -var="memory_gb=${MEMORY_GB}" \
   -var="min_replicas=${MIN_REPLICAS}" \
-  -var="max_replicas=${MAX_REPLICAS}" \
-  -var="krutrim_model=${KRUTRIM_MODEL}" \
-  -var="krutrim_api_base_url=${KRUTRIM_API_BASE_URL}" \
-  -var="deepseek_router_model=${DEEPSEEK_ROUTER_MODEL}")
+  -var="max_replicas=${MAX_REPLICAS}")
 
 if [[ "${TF_AUTO_APPROVE}" == "true" ]]; then
   CMD+=("-auto-approve")
@@ -42,4 +36,4 @@ fi
 
 popd >/dev/null
 
-echo "Terraform ${TF_ACTION} completed for environment ${ENVIRONMENT} in ${AZURE_LOCATION}"
+echo "TraceFox deployment (${TF_ACTION}) completed for environment ${ENVIRONMENT} in ${AZURE_LOCATION}"

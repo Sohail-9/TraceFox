@@ -4,7 +4,7 @@ TraceFox is an AI-powered PR review and test intelligence platform that provides
 
 ## Architecture Overview
 
-The backend follows a microservice-inspired layout built around FastAPI and asynchronous workers. Each domain exposes lightweight adapters and in-memory stores so the system can evolve towards production-grade integrations (PostgreSQL, Neo4j, LanceDB, Redis, RabbitMQ, etc.) without blocking day-to-day development.
+The backend follows a microservice-inspired layout built around FastAPI and asynchronous workers. Each domain exposes lightweight adapters and in-memory stores so the system can evolve towards production-grade integrations (PostgreSQL, Neo4j, Qdrant, Redis, RabbitMQ, etc.) without blocking day-to-day development.
 
 ```
 services/
@@ -29,7 +29,21 @@ Key interactions:
 
 ## Prerequisites
 - Python 3.10+
-- (Optional) Local services for PostgreSQL, Redis, Neo4j, LanceDB if you want to wire real backends.
+- (Optional) Local services for PostgreSQL, Redis, Neo4j, Qdrant if you want to wire real backends.
+
+## Environment configuration
+
+TraceFox pulls every runtime setting from environment variables. Copy the sample
+file, adjust values as needed, and keep the resulting `.env` outside of version
+control:
+
+```bash
+cp .env.example .env
+```
+
+The provided docker-compose definitions read from `.env` to configure Redis,
+Neo4j, and Qdrant credentials. The API gateway and workers will also honour the
+same file when you export the variables locally (e.g. `set -a && source .env`).
 
 ## Installation
 ```bash
@@ -43,6 +57,20 @@ pip install -r requirements.txt
 ```bash
 uvicorn services.api_gateway.main:app --reload --port 8000
 ```
+
+If you prefer ad-hoc exports, the critical local services should align with your
+`.env` values:
+
+```bash
+export TRACEFOX_REDIS__HOST=127.0.0.1
+export TRACEFOX_REDIS__PORT=6379
+export TRACEFOX_REDIS__PASSWORD=tracefox-redis-pass
+export TRACEFOX_NEO4J__URI=neo4j://127.0.0.1:7687
+export TRACEFOX_NEO4J__USER=neo4j
+export TRACEFOX_NEO4J__PASSWORD=tracefox-neo4j-pass
+export TRACEFOX_QDRANT__HOST=127.0.0.1
+export TRACEFOX_QDRANT__PORT=6333
+``` 
 
 ### Core Endpoints
 
@@ -131,7 +159,7 @@ export TRACEFOX_NEO4J__URI=neo4j://localhost:7687
 - **Phase 3 (Enterprise)**: Configuration and service boundaries are structured to plug into SSO, RBAC, observability, and multi-region deployments described in the design document.
 
 ## Next Steps
-- Wire actual PostgreSQL/Redis/Neo4j/LanceDB clients inside `services/shared/database.py` and replace in-memory stores.
+- Wire actual PostgreSQL/Redis/Neo4j/Qdrant clients inside `services/shared/database.py` and replace in-memory stores.
 - Replace heuristic data generation with real AST parsing, embedding generation, and multi-model inference.
 - Extend `services/observability` to emit traces/metrics via OpenTelemetry (Jaeger/Prometheus).
 - Integrate message brokers (RabbitMQ/Kafka) using the `event_bus` abstraction.
@@ -139,4 +167,3 @@ export TRACEFOX_NEO4J__URI=neo4j://localhost:7687
 
 ## Frontend
 The `frontend/` directory still contains the existing Next.js portal. Update its API calls to align with the new endpoints when ready.
-

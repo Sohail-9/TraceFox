@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE_NAME=${IMAGE_NAME:-devguardian-api}
+IMAGE_NAME=${IMAGE_NAME:-tracefox-api}
 IMAGE_TAG=${IMAGE_TAG:-latest}
 REGISTRY=${REGISTRY:-}
 

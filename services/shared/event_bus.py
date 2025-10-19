@@ -7,7 +7,7 @@ from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Awaitable, Callable, Dict, List
 
-from services.shared.config import settings
+from services.shared.config import ConfigurationError, get_settings
 
 EventHandler = Callable[[dict], Awaitable[None]]
 
@@ -16,10 +16,18 @@ class EventBus:
     """Simple in-memory async pub/sub bus with backpressure awareness."""
 
     def __init__(self) -> None:
-        self._topics: Dict[str, asyncio.Queue[dict]] = defaultdict(
-            lambda: asyncio.Queue(maxsize=1024)
-        )
+        self._topics: Dict[str, asyncio.Queue[dict]] = defaultdict(self._build_queue)
         self._consumer_tasks: Dict[str, List[asyncio.Task[None]]] = defaultdict(list)
+
+    @staticmethod
+    def _queue_size() -> int:
+        try:
+            return get_settings().messaging.queue_max_size
+        except ConfigurationError as exc:  # pragma: no cover - surfaces during bootstrap
+            raise RuntimeError("Messaging configuration is required before using the event bus") from exc
+
+    def _build_queue(self) -> asyncio.Queue[dict]:
+        return asyncio.Queue(maxsize=self._queue_size())
 
     async def publish(self, topic: str, payload: dict) -> None:
         queue = self._topics[topic]
@@ -55,7 +63,9 @@ class EventBus:
 
 event_bus = EventBus()
 
-# Pre-register known topics derived from messaging config
-for group in settings.messaging.consumer_groups:
-    event_bus._topics.setdefault(group, asyncio.Queue(maxsize=1024))
-
+try:
+    for group in get_settings().messaging.consumer_groups:
+        event_bus._topics.setdefault(group, event_bus._build_queue())
+except ConfigurationError:
+    # Topics will be initialised lazily once configuration becomes available.
+    pass

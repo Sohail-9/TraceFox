@@ -18,7 +18,7 @@ resource "azurerm_resource_group" "this" {
   location = var.location
   tags = merge(
     {
-      Project     = "DevGuardian"
+      Project     = "TraceFox"
       Environment = var.environment
     },
     var.additional_tags
@@ -56,24 +56,14 @@ resource "azurerm_container_app" "this" {
 
   template {
     container {
-      name   = "devguardian"
+      name   = "tracefox"
       image  = var.image
       cpu    = var.cpu
       memory = "${var.memory_gb}Gi"
 
       env {
-        name  = "KRUTRIM_MODEL"
-        value = var.krutrim_model
-      }
-
-      env {
-        name  = "KRUTRIM_API_BASE_URL"
-        value = var.krutrim_api_base_url
-      }
-
-      env {
-        name  = "DEEPSEEK_ROUTER_MODEL"
-        value = var.deepseek_router_model
+        name  = "TRACEFOX_ENVIRONMENT"
+        value = var.environment
       }
     }
 
@@ -85,4 +75,3 @@ resource "azurerm_container_app" "this" {
 
   tags = azurerm_resource_group.this.tags
 }
-
