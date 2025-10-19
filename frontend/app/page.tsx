@@ -1,21 +1,23 @@
 "use client";
 
 import clsx from "clsx";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 
 import { Card } from "@/components/Card";
+import { Skeleton } from "@/components/Skeleton";
+import { useToast } from "@/components/ToastProvider";
 import { getApiBaseUrl, postJson, swrFetcher } from "@/lib/api";
 import type {
   GenerateTestsResponse,
+  RCAResponse,
   ReviewSummary,
   TestExecutionSummary,
   TestResultsResponse,
-  RCAResponse,
   WebhookResponse,
 } from "@/types/backend";
 
-const defaultWebhookPayload = {
+const DEFAULT_WEBHOOK_PAYLOAD = {
   event_type: "pull_request",
   action: "opened",
   repository: {
@@ -35,13 +37,13 @@ const defaultWebhookPayload = {
   files: [],
 };
 
-const severityStyles: Record<string, string> = {
+const SEVERITY_STYLES: Record<string, string> = {
   critical: "border-rose-400/50 bg-rose-500/10 text-rose-100",
   major: "border-amber-400/50 bg-amber-500/10 text-amber-100",
   minor: "border-emerald-400/50 bg-emerald-500/10 text-emerald-100",
 };
 
-const statusStyles: Record<string, string> = {
+const EXECUTION_STATUS_STYLES: Record<string, string> = {
   passed: "border-emerald-400/40 bg-emerald-500/10 text-emerald-100",
   failed: "border-rose-400/40 bg-rose-500/10 text-rose-100",
   flaky: "border-amber-400/40 bg-amber-500/10 text-amber-100",
@@ -49,28 +51,28 @@ const statusStyles: Record<string, string> = {
   running: "border-brand-400/40 bg-brand-500/10 text-brand-100",
 };
 
-const pipelineStatusStyles: Record<PipelineStatus, string> = {
+const PIPELINE_STATUS_STYLES = {
   done: "border-emerald-400/40 bg-emerald-500/10 text-emerald-100",
   active: "border-brand-400/50 bg-brand-500/10 text-brand-50",
   pending: "border-slate-700/60 bg-slate-900/60 text-slate-300",
-};
+} as const;
 
-const statToneStyles: Record<StatTone, string> = {
+const STAT_TONE_STYLES = {
   rose: "border-rose-400/30 bg-rose-500/10",
   amber: "border-amber-400/30 bg-amber-500/10",
   emerald: "border-emerald-400/30 bg-emerald-500/10",
   brand: "border-brand-400/30 bg-brand-500/10",
   slate: "border-slate-600/60 bg-slate-900/60",
-};
+} as const;
 
-const activityToneStyles: Record<ActivityTone, string> = {
+const ACTIVITY_TONE_STYLES = {
   success: "border-emerald-500/40 bg-emerald-500/10 text-emerald-100",
   error: "border-rose-500/40 bg-rose-500/10 text-rose-100",
   info: "border-brand-400/40 bg-brand-500/10 text-brand-100",
   neutral: "border-slate-700/60 bg-slate-900/60 text-slate-300",
-};
+} as const;
 
-const executionToneBars: Record<string, string> = {
+const EXECUTION_BREAKDOWN_STYLES: Record<string, string> = {
   Passed: "bg-emerald-400",
   Failed: "bg-rose-400",
   Flaky: "bg-amber-400",
@@ -79,33 +81,33 @@ const executionToneBars: Record<string, string> = {
 
 type PipelineStatus = "done" | "active" | "pending";
 
-type PipelineStep = {
+interface PipelineStep {
   id: string;
   label: string;
   description: string;
   status: PipelineStatus;
-};
+}
 
-type StatTone = "rose" | "amber" | "emerald" | "brand" | "slate";
+type StatTone = keyof typeof STAT_TONE_STYLES;
 
-type SummaryStat = {
+interface SummaryStat {
   id: string;
   label: string;
   value: string;
   description: string;
   tone: StatTone;
-};
+}
 
 type InsightTab = "findings" | "tests" | "rca";
 
-type ActivityTone = "success" | "error" | "info" | "neutral";
+type ActivityTone = keyof typeof ACTIVITY_TONE_STYLES;
 
-type ActivityItem = {
+interface ActivityItem {
   id: string;
   title: string;
   detail: string;
   tone: ActivityTone;
-};
+}
 
 function formatTimestamp(value?: string) {
   if (!value) return "";
@@ -114,10 +116,11 @@ function formatTimestamp(value?: string) {
   return date.toLocaleString();
 }
 
-export default function DashboardPage() {
+export default function DashboardPage(): JSX.Element {
+  const { addToast } = useToast();
   const [provider, setProvider] = useState("github");
   const [webhookBody, setWebhookBody] = useState(() =>
-    JSON.stringify(defaultWebhookPayload, null, 2)
+    JSON.stringify(DEFAULT_WEBHOOK_PAYLOAD, null, 2)
   );
   const [webhookStatus, setWebhookStatus] = useState<string | null>(null);
   const [webhookError, setWebhookError] = useState<string | null>(null);
@@ -130,15 +133,17 @@ export default function DashboardPage() {
     "webhook" | "load" | "generate" | "execute" | null
   >(null);
   const [insightTab, setInsightTab] = useState<InsightTab>("findings");
-
-  useEffect(() => {
-    if (activePrId) {
-      setPrInput(activePrId);
-    }
-  }, [activePrId]);
+  const [stepsCompleted, setStepsCompleted] = useState({
+    webhook: false,
+    review: false,
+    tests: false,
+    execution: false,
+  });
 
   const reviewKey = activePrId
-    ? `/reviews/pr/${encodeURIComponent(activePrId)}?include_tests=true&include_rca=true`
+    ? `/reviews/pr/${encodeURIComponent(
+        activePrId
+      )}?include_tests=true&include_rca=true`
     : null;
 
   const {
@@ -171,6 +176,50 @@ export default function DashboardPage() {
     }
   );
 
+  useEffect(() => {
+    if (activePrId) {
+      setPrInput(activePrId);
+    }
+  }, [activePrId]);
+
+  useEffect(() => {
+    if (review) {
+      setStepsCompleted((prev) =>
+        prev.review ? prev : { ...prev, review: true }
+      );
+    }
+  }, [review]);
+
+  useEffect(() => {
+    if (review?.tests?.length) {
+      setStepsCompleted((prev) =>
+        prev.tests ? prev : { ...prev, tests: true }
+      );
+    }
+  }, [review?.tests?.length]);
+
+  useEffect(() => {
+    if (executionResults) {
+      setStepsCompleted((prev) =>
+        prev.execution ? prev : { ...prev, execution: true }
+      );
+    }
+  }, [executionResults]);
+
+  useEffect(() => {
+    if (reviewError) {
+      const message =
+        reviewError instanceof Error
+          ? reviewError.message
+          : "Unable to load review.";
+      addToast({
+        tone: "error",
+        title: "Review fetch failed",
+        description: message,
+      });
+    }
+  }, [addToast, reviewError]);
+
   const apiSource = getApiBaseUrl();
   const findings = review?.findings ?? [];
   const tests = review?.tests ?? [];
@@ -185,64 +234,69 @@ export default function DashboardPage() {
   }, [review?.rca, rca]);
 
   const pipelineSteps = useMemo<PipelineStep[]>(() => {
-    const steps = [
+    const webhookDone = Boolean(activePrId || webhookStatus);
+    const reviewDone = Boolean(review);
+    const testsDone = tests.length > 0;
+    const executionDone = Boolean(executionResults);
+    const rcaDone = rcaItems.length > 0;
+
+    const stepStatus = (complete: boolean, previousComplete: boolean): PipelineStatus => {
+      if (complete) return "done";
+      return previousComplete ? "active" : "pending";
+    };
+
+    return [
       {
         id: "webhook",
         label: "Webhook Received",
         description: "Ingest PR metadata and queue indexing jobs",
-        complete: Boolean(activePrId || webhookStatus),
+        status: webhookDone ? "done" : "active",
       },
       {
         id: "review",
         label: "AI Review",
         description: "Generate review summary and actionable findings",
-        complete: Boolean(review),
+        status: stepStatus(reviewDone, webhookDone),
       },
       {
         id: "tests",
         label: "Test Generation",
         description: "Produce deterministic tests mapped to findings",
-        complete: tests.length > 0,
+        status: stepStatus(testsDone, reviewDone),
       },
       {
         id: "execution",
         label: "Test Execution",
         description: "Run prioritized suites and capture telemetry",
-        complete: Boolean(executionResults),
+        status: stepStatus(executionDone, testsDone),
       },
       {
         id: "rca",
         label: "Root Cause Analysis",
         description: "Synthesize failures into remediation guidance",
-        complete: rcaItems.length > 0,
+        status: stepStatus(rcaDone, executionDone),
       },
     ];
+  }, [activePrId, executionResults, rcaItems.length, review, tests.length, webhookStatus]);
 
-    const firstIncomplete = steps.findIndex((step) => !step.complete);
-    return steps.map((step, index) => ({
-      id: step.id,
-      label: step.label,
-      description: step.description,
-      status: step.complete
-        ? "done"
-        : index === firstIncomplete || firstIncomplete === -1
-        ? "active"
-        : "pending",
-    }));
-  }, [activePrId, executionResults, review, rcaItems.length, tests.length, webhookStatus]);
+  const passRate = useMemo(() => {
+    if (!executionResults || executionResults.total_tests === 0) {
+      return null;
+    }
+    return Math.round(
+      (executionResults.passed / executionResults.total_tests) * 100
+    );
+  }, [executionResults]);
 
   const summaryStats = useMemo<SummaryStat[]>(() => {
-    const passRate = executionResults && executionResults.total_tests > 0
-      ? Math.round((executionResults.passed / executionResults.total_tests) * 100)
-      : null;
-
-    const passTone: StatTone = passRate === null
-      ? "slate"
-      : passRate >= 90
-      ? "emerald"
-      : passRate >= 70
-      ? "amber"
-      : "rose";
+    const passTone: StatTone =
+      passRate === null
+        ? "slate"
+        : passRate >= 90
+        ? "emerald"
+        : passRate >= 70
+        ? "amber"
+        : "rose";
 
     return [
       {
@@ -276,7 +330,73 @@ export default function DashboardPage() {
         tone: passTone,
       },
     ];
-  }, [executionResults, review, tests.length]);
+  }, [executionResults, passRate, review, tests.length]);
+
+  const quickStats = useMemo(
+    () => [
+      {
+        label: "Active PR",
+        value: activePrId ?? "—",
+        description: "Current repository under review",
+      },
+      {
+        label: "Tests Generated",
+        value: String(tests.length),
+        description: "TraceFox-managed cases ready to execute",
+      },
+      {
+        label: "RCA Insights",
+        value: String(rcaItems.length),
+        description: "Actionable remediation reports available",
+      },
+      {
+        label: "Pass Rate",
+        value: passRate !== null ? `${passRate}%` : "—",
+        description: "Latest execution success ratio",
+      },
+    ],
+    [activePrId, passRate, rcaItems.length, tests.length]
+  );
+
+  const checklistItems = useMemo(
+    () => [
+      {
+        key: "webhook",
+        label: "Send a webhook",
+        detail: "Kick off indexing and an initial AI review",
+        done: stepsCompleted.webhook,
+      },
+      {
+        key: "review",
+        label: "Review AI findings",
+        detail: "Inspect generated findings for your PR",
+        done: stepsCompleted.review,
+      },
+      {
+        key: "tests",
+        label: "Generate tests",
+        detail: "Synthesize deterministic cases mapped to findings",
+        done: stepsCompleted.tests,
+      },
+      {
+        key: "execution",
+        label: "Run a test execution",
+        detail: "Capture telemetry and unlock RCA insights",
+        done: stepsCompleted.execution,
+      },
+    ],
+    [stepsCompleted]
+  );
+
+  const checklistProgress = useMemo(() => {
+    const total = checklistItems.length;
+    const completed = checklistItems.filter((item) => item.done).length;
+    return {
+      total,
+      completed,
+      percent: total === 0 ? 0 : Math.round((completed / total) * 100),
+    };
+  }, [checklistItems]);
 
   const insightNav = useMemo(
     () => [
@@ -355,14 +475,25 @@ export default function DashboardPage() {
       });
     }
     return items;
-  }, [actionError, actionMessage, executionResults, review, reviewLoading, rcaItems, webhookError, webhookStatus]);
+  }, [
+    actionError,
+    actionMessage,
+    executionResults,
+    review,
+    reviewLoading,
+    rcaItems,
+    webhookError,
+    webhookStatus,
+  ]);
 
-  const nextPipelineAction = pipelineSteps.find((step) => step.status === "active");
+  const nextPipelineAction = pipelineSteps.find(
+    (step) => step.status === "active"
+  );
 
-  function resetMessages() {
+  const resetMessages = useCallback(() => {
     setActionMessage(null);
     setActionError(null);
-  }
+  }, []);
 
   const handleWebhookSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -378,17 +509,32 @@ export default function DashboardPage() {
         payload
       );
       setWebhookStatus(response.message ?? "Webhook accepted.");
-      const newPrId = payload?.repository?.id && payload?.pull_request?.number
-        ? `${payload.repository.id}:${payload.pull_request.number}`
-        : null;
+      setStepsCompleted((prev) => ({ ...prev, webhook: true }));
+      addToast({
+        tone: "success",
+        title: "Webhook accepted",
+        description:
+          response.message ?? "TraceFox queued indexing and AI review.",
+      });
+      const newPrId =
+        payload?.repository?.id && payload?.pull_request?.number
+          ? `${payload.repository.id}:${payload.pull_request.number}`
+          : null;
       if (newPrId) {
         setActivePrId(newPrId);
         setExecutionId(null);
       }
     } catch (error) {
-      setWebhookError(
-        error instanceof Error ? error.message : "Unable to submit webhook payload."
-      );
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to submit webhook payload.";
+      setWebhookError(message);
+      addToast({
+        tone: "error",
+        title: "Webhook failed",
+        description: message,
+      });
     } finally {
       setLoadingAction(null);
     }
@@ -401,7 +547,9 @@ export default function DashboardPage() {
     setWebhookError(null);
 
     if (!prInput.trim()) {
-      setActionError("Enter a PR identifier in the form <repository-id>:<pr-number>.");
+      setActionError(
+        "Enter a PR identifier in the form <repository-id>:<pr-number>."
+      );
       return;
     }
 
@@ -430,14 +578,27 @@ export default function DashboardPage() {
         "/tests/generate",
         body
       );
-      setActionMessage(
-        `Queued ${response.total_generated ?? response.test_cases.length} tests for generation.`
-      );
+      const total =
+        response.total_generated ?? response.test_cases?.length ?? 0;
+      setActionMessage(`Queued ${total} tests for generation.`);
+      setStepsCompleted((prev) => ({ ...prev, tests: true }));
+      addToast({
+        tone: "success",
+        title: "Test generation queued",
+        description: `TraceFox prepared ${total} tests.`,
+      });
       await mutateReview();
     } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : "Unable to queue test generation."
-      );
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to queue test generation.";
+      setActionError(message);
+      addToast({
+        tone: "error",
+        title: "Test generation failed",
+        description: message,
+      });
     } finally {
       setLoadingAction(null);
     }
@@ -468,11 +629,24 @@ export default function DashboardPage() {
       setActionMessage(
         `Execution ${summary.execution_id} started for ${summary.total_tests} tests.`
       );
+      setStepsCompleted((prev) => ({ ...prev, execution: true }));
+      addToast({
+        tone: "success",
+        title: "Execution started",
+        description: `Running ${summary.total_tests} tests in parallel.`,
+      });
       await mutateReview();
     } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : "Unable to execute tests."
-      );
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to execute tests.";
+      setActionError(message);
+      addToast({
+        tone: "error",
+        title: "Execution failed",
+        description: message,
+      });
     } finally {
       setLoadingAction(null);
     }
@@ -505,9 +679,9 @@ export default function DashboardPage() {
               Orchestrate reviews, testing, and RCA with confidence
             </h1>
             <p className="text-sm text-slate-300 md:text-base">
-              Drive resilient delivery by coordinating AI reviews, deterministic tests, and
-              automated remediation. Everything you need to evaluate a pull request lives in one
-              adaptive workspace.
+              Drive resilient delivery by coordinating AI reviews, deterministic
+              tests, and automated remediation. Everything you need to evaluate a
+              pull request lives in one adaptive workspace.
             </p>
           </div>
           <div className="flex w-full flex-col gap-4 md:max-w-xs">
@@ -540,6 +714,74 @@ export default function DashboardPage() {
         </div>
       </section>
 
+      <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+        <Card
+          title="Onboarding Checklist"
+          accent="slate"
+          icon={<span>🧭</span>}
+          action={
+            <span className="text-slate-300">
+              {checklistProgress.completed}/{checklistProgress.total} Complete
+            </span>
+          }
+        >
+          <div className="space-y-3">
+            <div>
+              <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-slate-400">
+                <span>Progress</span>
+                <span>{checklistProgress.percent}%</span>
+              </div>
+              <div className="mt-2 h-2 w-full rounded-full bg-slate-800">
+                <div
+                  className="h-full rounded-full bg-brand-500 transition-all"
+                  style={{ width: `${checklistProgress.percent}%` }}
+                />
+              </div>
+            </div>
+            <ul className="space-y-3">
+              {checklistItems.map((item) => (
+                <li
+                  key={item.key}
+                  className={clsx(
+                    "rounded-2xl border px-4 py-3 text-sm shadow-inner shadow-black/20",
+                    item.done
+                      ? "border-emerald-400/40 bg-emerald-500/10 text-emerald-100"
+                      : "border-slate-700/60 bg-slate-900/60 text-slate-200"
+                  )}
+                >
+                  <div className="flex items-center justify-between text-xs uppercase tracking-wide">
+                    <span className="text-white">{item.label}</span>
+                    <span>{item.done ? "Done" : "Pending"}</span>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-200/80">{item.detail}</p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </Card>
+
+        <Card title="Operational Pulse" accent="emerald" icon={<span>📈</span>}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {quickStats.map((stat) => (
+              <div
+                key={stat.label}
+                className="rounded-2xl border border-emerald-400/30 bg-emerald-500/5 px-4 py-3 text-sm text-slate-100"
+              >
+                <p className="text-xs uppercase tracking-wide text-emerald-200">
+                  {stat.label}
+                </p>
+                <p className="mt-2 text-2xl font-semibold text-white">
+                  {stat.value}
+                </p>
+                <p className="mt-1 text-xs text-emerald-200/80">
+                  {stat.description}
+                </p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+
       <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
         <Card title="Pipeline Overview" accent="brand" icon={<span>🛰️</span>}>
           <ol className="space-y-4">
@@ -548,7 +790,7 @@ export default function DashboardPage() {
                 key={step.id}
                 className={clsx(
                   "flex flex-col gap-1 rounded-2xl border px-4 py-3 text-sm shadow",
-                  pipelineStatusStyles[step.status]
+                  PIPELINE_STATUS_STYLES[step.status]
                 )}
               >
                 <div className="flex items-center justify-between text-xs uppercase tracking-wide">
@@ -574,24 +816,37 @@ export default function DashboardPage() {
                 key={stat.id}
                 className={clsx(
                   "rounded-2xl border px-4 py-3 shadow-inner shadow-black/20",
-                  statToneStyles[stat.tone]
+                  STAT_TONE_STYLES[stat.tone]
                 )}
               >
-                <dt className="text-xs uppercase tracking-wide text-slate-300">{stat.label}</dt>
-                <dd className="mt-1 text-2xl font-semibold text-white">{stat.value}</dd>
-                <p className="mt-1 text-xs text-slate-300/90">{stat.description}</p>
+                <dt className="text-xs uppercase tracking-wide text-slate-300">
+                  {stat.label}
+                </dt>
+                <dd className="mt-1 text-2xl font-semibold text-white">
+                  {stat.value}
+                </dd>
+                <p className="mt-1 text-xs text-slate-300/90">
+                  {stat.description}
+                </p>
               </div>
             ))}
           </dl>
         </Card>
       </div>
 
-      <Card title="Operations Console" accent="brand" icon={<span>🛠️</span>} footer="Use sample payloads to iterate quickly, then replay real PR webhooks from your Git provider for full-fidelity validation.">
+      <Card
+        title="Operations Console"
+        accent="brand"
+        icon={<span>🛠️</span>}
+        footer="Use sample payloads to iterate quickly, then replay real PR webhooks from your Git provider for full-fidelity validation."
+      >
         <div className="grid gap-8 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
           <form className="space-y-4" onSubmit={handleWebhookSubmit}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <label className="text-xs uppercase tracking-wide text-slate-300">Provider</label>
+                <label className="text-xs uppercase tracking-wide text-slate-300">
+                  Provider
+                </label>
                 <select
                   value={provider}
                   onChange={(event) => setProvider(event.target.value)}
@@ -604,7 +859,9 @@ export default function DashboardPage() {
               </div>
               <button
                 type="button"
-                onClick={() => setWebhookBody(JSON.stringify(defaultWebhookPayload, null, 2))}
+                onClick={() =>
+                  setWebhookBody(JSON.stringify(DEFAULT_WEBHOOK_PAYLOAD, null, 2))
+                }
                 className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-1 text-xs font-semibold text-slate-300 transition hover:border-brand-400 hover:text-white"
               >
                 Reset payload
@@ -655,7 +912,9 @@ export default function DashboardPage() {
             </form>
 
             <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 shadow-inner shadow-black/30">
-              <p className="text-xs uppercase tracking-wide text-slate-400">Quick actions</p>
+              <p className="text-xs uppercase tracking-wide text-slate-400">
+                Quick actions
+              </p>
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 <button
                   type="button"
@@ -682,7 +941,9 @@ export default function DashboardPage() {
               ) : null}
               {reviewError ? (
                 <p className="mt-3 text-xs text-rose-300">
-                  {reviewError instanceof Error ? reviewError.message : "Unable to load review."}
+                  {reviewError instanceof Error
+                    ? reviewError.message
+                    : "Unable to load review."}
                 </p>
               ) : null}
               {reviewLoading && !review ? (
@@ -691,30 +952,27 @@ export default function DashboardPage() {
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3 text-xs uppercase tracking-wide text-slate-300">
-                <div className="flex items-center justify-between">
-                  <span>Review Status</span>
-                  <span className="text-white">
-                    {review ? "Ready" : reviewLoading ? "Loading…" : "Awaiting load"}
-                  </span>
-                </div>
-              </div>
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3 text-xs uppercase tracking-wide text-slate-300">
-                <div className="flex items-center justify-between">
-                  <span>Execution Status</span>
-                  <span className="text-white">
-                    {executionResults ? executionResults.status : executionId ? "Awaiting results" : "Idle"}
-                  </span>
-                </div>
-              </div>
-              <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3 text-xs uppercase tracking-wide text-slate-300 md:col-span-2">
-                <div className="flex items-center justify-between">
-                  <span>RCA Insights</span>
-                  <span className="text-white">
-                    {rcaItems.length ? `${rcaItems.length} available` : "Pending execution"}
-                  </span>
-                </div>
-              </div>
+              <StatusBadge
+                label="Review Status"
+                value={review ? "Ready" : reviewLoading ? "Loading…" : "Awaiting load"}
+              />
+              <StatusBadge
+                label="Execution Status"
+                value={
+                  executionResults
+                    ? executionResults.status
+                    : executionId
+                    ? "Awaiting results"
+                    : "Idle"
+                }
+              />
+              <StatusBadge
+                className="md:col-span-2"
+                label="RCA Insights"
+                value={
+                  rcaItems.length ? `${rcaItems.length} available` : "Pending execution"
+                }
+              />
             </div>
           </div>
         </div>
@@ -744,136 +1002,39 @@ export default function DashboardPage() {
           </div>
 
           {insightTab === "findings" ? (
-            <div className="space-y-4">
-              {review?.summary ? (
-                <div className="rounded-2xl border border-rose-400/40 bg-rose-500/10 p-4 text-sm text-rose-100 shadow-inner shadow-rose-900/40">
-                  <p className="font-semibold">{review.summary}</p>
-                  <p className="mt-2 text-xs text-rose-100/80">
-                    Last updated {formatTimestamp(review.created_at)}
-                  </p>
+            reviewLoading && !review ? (
+              <div className="space-y-4">
+                <Skeleton className="h-4 w-1/2" />
+                <div className="space-y-3">
+                  <Skeleton className="h-20 w-full" />
+                  <Skeleton className="h-20 w-full" />
                 </div>
-              ) : null}
-              {findings.length ? (
-                <ul className="space-y-3">
-                  {findings.map((finding) => {
-                    const severity = finding.severity?.toLowerCase() ?? "minor";
-                    const severityClass = severityStyles[severity] ?? severityStyles.minor;
-                    return (
-                      <li
-                        key={finding.id}
-                        className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 shadow-inner shadow-black/40"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <h3 className="text-sm font-semibold text-slate-100">
-                            {finding.file_path}:{finding.line_number}
-                          </h3>
-                          <span
-                            className={clsx(
-                              "rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wider",
-                              severityClass
-                            )}
-                          >
-                            {finding.severity.toUpperCase()} · {finding.category}
-                          </span>
-                        </div>
-                        <p className="mt-3 text-sm text-slate-200">{finding.description}</p>
-                        {finding.suggested_fix ? (
-                          <p className="mt-2 text-xs text-emerald-200/80">
-                            Suggestion: {finding.suggested_fix}
-                          </p>
-                        ) : null}
-                        <p className="mt-2 text-xs text-slate-400">
-                          Confidence: {(finding.confidence_score * 100).toFixed(0)}%
-                        </p>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : (
-                <p className="text-sm text-slate-400">No findings recorded yet.</p>
-              )}
-            </div>
+              </div>
+            ) : (
+              <FindingList findings={findings} review={review} />
+            )
           ) : null}
 
           {insightTab === "tests" ? (
-            <div className="space-y-3">
-              {tests.length ? (
-                <ul className="space-y-3">
-                  {tests.map((test) => (
-                    <li
-                      key={test.id}
-                      className="rounded-2xl border border-amber-400/30 bg-amber-500/10 p-4 text-amber-50 shadow-inner shadow-amber-900/40"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-wide">
-                        <span>{test.test_name}</span>
-                        <span>{test.test_type}</span>
-                        <span>Priority P{test.priority}</span>
-                      </div>
-                      <pre className="mt-3 max-h-48 overflow-auto rounded-xl bg-black/40 p-3 text-xs text-amber-100">
-                        <code>{test.test_code}</code>
-                      </pre>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-sm text-slate-400">
-                  No generated tests yet. Queue test generation to seed execution.
-                </p>
-              )}
-            </div>
+            loadingAction === "generate" && !tests.length ? (
+              <div className="space-y-3">
+                <Skeleton className="h-4 w-1/3" />
+                <Skeleton className="h-24 w-full" />
+              </div>
+            ) : (
+              <TestList tests={tests} />
+            )
           ) : null}
 
           {insightTab === "rca" ? (
-            <div className="space-y-4">
-              {rcaItems.length ? (
-                <ul className="space-y-4">
-                  {rcaItems.map((item) => (
-                    <li
-                      key={item.id}
-                      className="rounded-2xl border border-rose-400/40 bg-rose-500/10 p-4 text-rose-100 shadow-inner shadow-rose-900/40"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-3 text-xs uppercase tracking-wide">
-                        <span>Execution: {item.test_execution_id}</span>
-                        <span>Category: {item.category}</span>
-                        <span>Confidence: {(item.confidence_score * 100).toFixed(0)}%</span>
-                      </div>
-                      <p className="mt-3 text-sm font-medium">{item.root_cause_summary}</p>
-                      <pre className="mt-2 whitespace-pre-wrap text-xs text-rose-100/80">
-{JSON.stringify(item.root_cause_details, null, 2)}
-                      </pre>
-                      {item.suggested_fixes.length ? (
-                        <div className="mt-3 space-y-2 text-xs text-rose-100/80">
-                          <p className="font-semibold uppercase tracking-wide text-rose-200/80">
-                            Suggested fixes
-                          </p>
-                          {item.suggested_fixes.map((fix, idx) => (
-                            <pre key={idx} className="rounded-xl bg-black/30 p-3">
-                              {JSON.stringify(fix, null, 2)}
-                            </pre>
-                          ))}
-                        </div>
-                      ) : null}
-                      {item.prevention_recommendations.length ? (
-                        <div className="mt-3 space-y-1 text-xs text-rose-100/80">
-                          <p className="font-semibold uppercase tracking-wide text-rose-200/80">
-                            Prevention recommendations
-                          </p>
-                          <ul className="list-disc space-y-1 pl-5">
-                            {item.prevention_recommendations.map((rec) => (
-                              <li key={rec}>{rec}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-sm text-slate-400">
-                  RCA insights will appear as soon as a test execution produces failures.
-                </p>
-              )}
-            </div>
+            executionLoading && !rcaItems.length ? (
+              <div className="space-y-3">
+                <Skeleton className="h-4 w-1/4" />
+                <Skeleton className="h-28 w-full" />
+              </div>
+            ) : (
+              <RcaList rcaItems={rcaItems} />
+            )
           ) : null}
         </Card>
 
@@ -885,10 +1046,12 @@ export default function DashboardPage() {
                   key={item.id}
                   className={clsx(
                     "rounded-2xl border px-4 py-3 shadow-inner shadow-black/30",
-                    activityToneStyles[item.tone]
+                    ACTIVITY_TONE_STYLES[item.tone]
                   )}
                 >
-                  <p className="text-xs uppercase tracking-wide text-slate-200/80">{item.title}</p>
+                  <p className="text-xs uppercase tracking-wide text-slate-200/80">
+                    {item.title}
+                  </p>
                   <p className="mt-1 text-slate-100/90">{item.detail}</p>
                 </li>
               ))}
@@ -913,64 +1076,263 @@ export default function DashboardPage() {
             <p className="text-sm text-slate-400">Awaiting execution results…</p>
           ) : null}
           {executionResults ? (
-            <div className="space-y-6">
-              <div className="space-y-3">
-                <div className="grid gap-3 text-sm text-slate-200 md:grid-cols-2">
-                  <span>Status: {executionResults.status}</span>
-                  <span>Total: {executionResults.total_tests}</span>
-                  <span>Passed: {executionResults.passed}</span>
-                  <span>Failed: {executionResults.failed}</span>
-                  <span>Flaky: {executionResults.flaky}</span>
-                  <span>Duration: {(executionResults.execution_time_ms / 1000).toFixed(1)}s</span>
-                </div>
-                <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
-                  <div className="flex h-full">
-                    {executionBreakdown.map((part) => {
-                      const toneClass = executionToneBars[part.label] ?? "bg-slate-700";
-                      return (
-                        <div
-                          key={part.label}
-                          className={clsx("h-full", toneClass)}
-                          style={{
-                            width: executionTotal
-                              ? `${(part.value / executionTotal) * 100}%`
-                              : "0%",
-                          }}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-              <ul className="space-y-3">
-                {executionResults.results.map((result) => {
-                  const style = statusStyles[result.status] ?? statusStyles.running;
-                  return (
-                    <li
-                      key={result.execution_id}
-                      className={clsx("rounded-2xl border p-4 text-sm shadow", style)}
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-wide">
-                        <span>{result.test_name}</span>
-                        <span>{result.status}</span>
-                        <span>{(result.execution_time_ms / 1000).toFixed(2)}s</span>
-                      </div>
-                      {result.error_message ? (
-                        <p className="mt-2 text-xs text-rose-100/90">{result.error_message}</p>
-                      ) : null}
-                      {result.stack_trace ? (
-                        <pre className="mt-2 max-h-40 overflow-auto rounded-xl bg-black/40 p-3 text-xs text-slate-200">
-                          <code>{result.stack_trace}</code>
-                        </pre>
-                      ) : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
+            <ExecutionSummary
+              executionResults={executionResults}
+              executionBreakdown={executionBreakdown}
+              executionTotal={executionTotal}
+            />
           ) : null}
         </Card>
       ) : null}
+    </div>
+  );
+}
+
+function StatusBadge({
+  label,
+  value,
+  className,
+}: {
+  label: string;
+  value: string;
+  className?: string;
+}): JSX.Element {
+  return (
+    <div
+      className={clsx(
+        "rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3 text-xs uppercase tracking-wide text-slate-300",
+        className
+      )}
+    >
+      <div className="flex items-center justify-between">
+        <span>{label}</span>
+        <span className="text-white">{value}</span>
+      </div>
+    </div>
+  );
+}
+
+function FindingList({
+  findings,
+  review,
+}: {
+  findings: ReviewSummary["findings"];
+  review: ReviewSummary | undefined;
+}): JSX.Element {
+  return (
+    <div className="space-y-4">
+      {review?.summary ? (
+        <div className="rounded-2xl border border-rose-400/40 bg-rose-500/10 p-4 text-sm text-rose-100 shadow-inner shadow-rose-900/40">
+          <p className="font-semibold">{review.summary}</p>
+          <p className="mt-2 text-xs text-rose-100/80">
+            Last updated {formatTimestamp(review.created_at)}
+          </p>
+        </div>
+      ) : null}
+      {findings.length ? (
+        <ul className="space-y-3">
+          {findings.map((finding) => {
+            const severity = finding.severity?.toLowerCase() ?? "minor";
+            const severityClass =
+              SEVERITY_STYLES[severity] ?? SEVERITY_STYLES.minor;
+            return (
+              <li
+                key={finding.id}
+                className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 shadow-inner shadow-black/40"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h3 className="text-sm font-semibold text-slate-100">
+                    {finding.file_path}:{finding.line_number}
+                  </h3>
+                  <span
+                    className={clsx(
+                      "rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wider",
+                      severityClass
+                    )}
+                  >
+                    {finding.severity.toUpperCase()} · {finding.category}
+                  </span>
+                </div>
+                <p className="mt-3 text-sm text-slate-200">
+                  {finding.description}
+                </p>
+                {finding.suggested_fix ? (
+                  <p className="mt-2 text-xs text-emerald-200/80">
+                    Suggestion: {finding.suggested_fix}
+                  </p>
+                ) : null}
+                <p className="mt-2 text-xs text-slate-400">
+                  Confidence: {(finding.confidence_score * 100).toFixed(0)}%
+                </p>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="text-sm text-slate-400">
+          No findings recorded yet.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function TestList({
+  tests,
+}: {
+  tests: ReviewSummary["tests"] | undefined;
+}): JSX.Element {
+  if (!tests?.length) {
+    return (
+      <p className="text-sm text-slate-400">
+        No generated tests yet. Queue test generation to seed execution.
+      </p>
+    );
+  }
+  return (
+    <ul className="space-y-3">
+      {tests.map((test) => (
+        <li
+          key={test.id}
+          className="rounded-2xl border border-amber-400/30 bg-amber-500/10 p-4 text-amber-50 shadow-inner shadow-amber-900/40"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-wide">
+            <span>{test.test_name}</span>
+            <span>{test.test_type}</span>
+            <span>Priority P{test.priority}</span>
+          </div>
+          <pre className="mt-3 max-h-48 overflow-auto rounded-xl bg-black/40 p-3 text-xs text-amber-100">
+            <code>{test.test_code}</code>
+          </pre>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function RcaList({ rcaItems }: { rcaItems: RCAResponse[] }): JSX.Element {
+  if (!rcaItems.length) {
+    return (
+      <p className="text-sm text-slate-400">
+        RCA insights will appear as soon as a test execution produces failures.
+      </p>
+    );
+  }
+  return (
+    <ul className="space-y-4">
+      {rcaItems.map((item) => (
+        <li
+          key={item.id}
+          className="rounded-2xl border border-rose-400/40 bg-rose-500/10 p-4 text-rose-100 shadow-inner shadow-rose-900/40"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3 text-xs uppercase tracking-wide">
+            <span>Execution: {item.test_execution_id}</span>
+            <span>Category: {item.category}</span>
+            <span>Confidence: {(item.confidence_score * 100).toFixed(0)}%</span>
+          </div>
+          <p className="mt-3 text-sm font-medium">{item.root_cause_summary}</p>
+          <pre className="mt-2 whitespace-pre-wrap text-xs text-rose-100/80">
+            {JSON.stringify(item.root_cause_details, null, 2)}
+          </pre>
+          {item.suggested_fixes.length ? (
+            <div className="mt-3 space-y-2 text-xs text-rose-100/80">
+              <p className="font-semibold uppercase tracking-wide text-rose-200/80">
+                Suggested fixes
+              </p>
+              {item.suggested_fixes.map((fix, idx) => (
+                <pre key={idx} className="rounded-xl bg-black/30 p-3">
+                  {JSON.stringify(fix, null, 2)}
+                </pre>
+              ))}
+            </div>
+          ) : null}
+          {item.prevention_recommendations.length ? (
+            <div className="mt-3 space-y-1 text-xs text-rose-100/80">
+              <p className="font-semibold uppercase tracking-wide text-rose-200/80">
+                Prevention recommendations
+              </p>
+              <ul className="list-disc space-y-1 pl-5">
+                {item.prevention_recommendations.map((rec) => (
+                  <li key={rec}>{rec}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ExecutionSummary({
+  executionResults,
+  executionBreakdown,
+  executionTotal,
+}: {
+  executionResults: TestResultsResponse;
+  executionBreakdown: Array<{ label: string; value: number }>;
+  executionTotal: number;
+}): JSX.Element {
+  return (
+    <div className="space-y-6">
+      <div className="space-y-3">
+        <div className="grid gap-3 text-sm text-slate-200 md:grid-cols-2">
+          <span>Status: {executionResults.status}</span>
+          <span>Total: {executionResults.total_tests}</span>
+          <span>Passed: {executionResults.passed}</span>
+          <span>Failed: {executionResults.failed}</span>
+          <span>Flaky: {executionResults.flaky}</span>
+          <span>
+            Duration: {(executionResults.execution_time_ms / 1000).toFixed(1)}s
+          </span>
+        </div>
+        <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800">
+          <div className="flex h-full">
+            {executionBreakdown.map((part) => {
+              const toneClass = EXECUTION_BREAKDOWN_STYLES[part.label] ?? "bg-slate-700";
+              return (
+                <div
+                  key={part.label}
+                  className={clsx("h-full", toneClass)}
+                  style={{
+                    width: executionTotal
+                      ? `${(part.value / executionTotal) * 100}%`
+                      : "0%",
+                  }}
+                />
+              );
+            })}
+          </div>
+        </div>
+      </div>
+      <ul className="space-y-3">
+        {executionResults.results.map((result) => {
+          const style =
+            EXECUTION_STATUS_STYLES[result.status] ?? EXECUTION_STATUS_STYLES.running;
+          return (
+            <li
+              key={result.execution_id}
+              className={clsx("rounded-2xl border p-4 text-sm shadow", style)}
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs uppercase tracking-wide">
+                <span>{result.test_name}</span>
+                <span>{result.status}</span>
+                <span>{(result.execution_time_ms / 1000).toFixed(2)}s</span>
+              </div>
+              {result.error_message ? (
+                <p className="mt-2 text-xs text-rose-100/90">
+                  {result.error_message}
+                </p>
+              ) : null}
+              {result.stack_trace ? (
+                <pre className="mt-2 max-h-40 overflow-auto rounded-xl bg-black/40 p-3 text-xs text-slate-200">
+                  <code>{result.stack_trace}</code>
+                </pre>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
