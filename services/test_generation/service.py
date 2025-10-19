@@ -1,21 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Dict, List
 
-from services.code_analysis.service import FileAnalysis
-
-
-@dataclass
-class GeneratedTestCase:
-    name: str
-    description: str
-    priority: str
-    suggested_assertions: List[str]
+from services.common.model_router import ModelRouter
+from services.common.models import FileAnalysis, GeneratedTestCase
 
 
 class TestGenerationService:
-    """Lightweight heuristic-based test generator for the MVP."""
+    """Lightweight heuristic-based test generator for DevGuardian."""
+
+    def __init__(self) -> None:
+        self._router = ModelRouter()
 
     def generate(
         self, analyses: List[FileAnalysis], commit_id: str
@@ -24,12 +19,17 @@ class TestGenerationService:
 
         for analysis in analyses:
             priority = self._map_priority(analysis.risk_level)
+            model = self._router.select_for_tests(
+                risk_level=analysis.risk_level, locale="en"
+            )
             generated.append(
                 GeneratedTestCase(
                     name=self._build_test_name(commit_id, analysis),
                     description=self._build_description(analysis),
                     priority=priority,
                     suggested_assertions=self._suggest_assertions(analysis),
+                    model_selected=model,
+                    confidence=self._estimate_confidence(priority),
                 )
             )
 
@@ -63,3 +63,6 @@ class TestGenerationService:
         if not suggestions:
             suggestions.append("Add smoke test to confirm key outputs remain stable.")
         return suggestions
+
+    def _estimate_confidence(self, priority: str) -> float:
+        return {"P0": 0.55, "P1": 0.65, "P2": 0.75}.get(priority, 0.6)

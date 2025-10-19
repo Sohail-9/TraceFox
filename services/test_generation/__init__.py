@@ -1,2 +1,0 @@
-"""Test Generation service package."""
-

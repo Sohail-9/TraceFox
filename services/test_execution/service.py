@@ -1,26 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Dict, List
 import random
 import time
 
-from services.test_generation.service import GeneratedTestCase
-
-
-@dataclass
-class ExecutedTestCase:
-    name: str
-    status: str
-    duration_seconds: float
-    log_excerpt: str
+from services.common.models import GeneratedTestCase, TestExecutionResult
 
 
 class TestExecutionService:
     """Simulated test execution runner."""
 
-    def run(self, test_cases: List[GeneratedTestCase]) -> Dict[str, List[ExecutedTestCase]]:
-        executed: List[ExecutedTestCase] = []
+    def run(
+        self, test_cases: List[GeneratedTestCase]
+    ) -> Dict[str, List[TestExecutionResult]]:
+        executed: List[TestExecutionResult] = []
         random.seed(42)  # deterministic runs for the POC
 
         for case in test_cases:
@@ -32,11 +25,12 @@ class TestExecutionService:
             end_time = start_time + simulated_duration
 
             executed.append(
-                ExecutedTestCase(
+                TestExecutionResult(
                     name=case.name,
                     status=status,
                     duration_seconds=round(end_time - start_time, 2),
                     log_excerpt=log_excerpt,
+                    retry_required=status == "failed" and case.priority == "P0",
                 )
             )
 

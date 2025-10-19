@@ -1,2 +1,0 @@
-"""Code Analysis service package."""
-

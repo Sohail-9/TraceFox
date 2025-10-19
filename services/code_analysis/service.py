@@ -1,32 +1,36 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict, List, Optional
 import ast
+from hashlib import sha1
+from typing import Dict, List, Tuple
 
-
-@dataclass
-class FileChange:
-    path: str
-    content: str
-    language: str = "python"
-
-
-@dataclass
-class FileAnalysis:
-    path: str
-    ast_summary: Dict[str, int]
-    complexity_score: float
-    risk_level: str
-    warnings: List[str]
-
+from services.common.cache import ResponseCache
+from services.common.model_router import BASE_MODEL, ModelRouter
+from services.common.models import (
+    CodeAnalysisSummary,
+    FileAnalysis,
+    FileChange,
+)
 
 class CodeAnalysisService:
-    """Very small code analysis stub to power the TraceFox MVP pipeline."""
+    """Lightweight code analysis stub powering the DevGuardian pipeline."""
 
-    def analyze(self, files: List[FileChange]) -> Dict[str, List[FileAnalysis]]:
+    def __init__(self) -> None:
+        self._router = ModelRouter()
+        self._cache = ResponseCache()
+
+    def analyze(self, files: List[FileChange]) -> Dict[str, object]:
         analyses: List[FileAnalysis] = []
         for file in files:
+            cached = self._cache.get("analysis", file.path, file.content)
+            if cached:
+                analyses.append(cached)
+                continue
+
+            model = self._router.select_for_code_analysis(
+                language=file.language, file_size=len(file.content)
+            )
+
             if file.language.lower() != "python":
                 analyses.append(
                     FileAnalysis(
@@ -35,13 +39,16 @@ class CodeAnalysisService:
                         complexity_score=5.0,
                         risk_level="medium",
                         warnings=[f"Unsupported language: {file.language}"],
+                        embeddings_model=model,
+                        embedding_ref=None,
                     )
                 )
                 continue
 
-            ast_summary, warnings = self._build_ast_summary(file)
+            ast_summary, warnings = self._build_ast_summary(file.content)
             complexity_score = self._estimate_complexity(ast_summary)
             risk_level = self._determine_risk(complexity_score, warnings)
+            embedding_ref = self._generate_embedding_ref(file.content)
 
             analyses.append(
                 FileAnalysis(
@@ -50,26 +57,37 @@ class CodeAnalysisService:
                     complexity_score=complexity_score,
                     risk_level=risk_level,
                     warnings=warnings,
+                    embeddings_model=model,
+                    embedding_ref=embedding_ref,
                 )
             )
+            self._cache.set(analyses[-1], "analysis", file.path, file.content)
 
         overall_risk = self._summarise_platform_risk(analyses)
+        summary = CodeAnalysisSummary(
+            overall_risk=overall_risk,
+            average_complexity=round(
+                sum(a.complexity_score for a in analyses) / len(analyses), 2
+            )
+            if analyses
+            else 0.0,
+            model_used=(
+                "CodeLlama-34B"
+                if any(a.embeddings_model == "CodeLlama-34B" for a in analyses)
+                else BASE_MODEL
+            ),
+        )
+
         return {
             "files": analyses,
-            "summary": {
-                "overall_risk": overall_risk,
-                "average_complexity": round(
-                    sum(a.complexity_score for a in analyses) / len(analyses), 2
-                )
-                if analyses
-                else 0.0,
-            },
+            "summary": summary,
+            "cache": self._cache.stats(),
         }
 
-    def _build_ast_summary(self, file: FileChange) -> tuple[Dict[str, int], List[str]]:
+    def _build_ast_summary(self, content: str) -> Tuple[Dict[str, int], List[str]]:
         warnings: List[str] = []
         try:
-            tree = ast.parse(file.content)
+            tree = ast.parse(content)
         except SyntaxError as exc:
             warnings.append(f"Syntax error: {exc.msg} (line {exc.lineno})")
             return {"syntax_errors": 1}, warnings
@@ -129,6 +147,10 @@ class CodeAnalysisService:
         reverse = {v: k for k, v in risk_order.items()}
         return reverse[highest]
 
+    def _generate_embedding_ref(self, content: str) -> str:
+        digest = sha1(content.encode("utf-8")).hexdigest()
+        return f"embed::{digest[:12]}"
+
 
 def build_file_changes(payload: List[Dict[str, str]]) -> List[FileChange]:
     return [
@@ -139,4 +161,3 @@ def build_file_changes(payload: List[Dict[str, str]]) -> List[FileChange]:
         )
         for item in payload
     ]
-

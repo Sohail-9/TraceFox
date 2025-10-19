@@ -4,7 +4,7 @@ from typing import List, Optional
 
 
 class KnowledgeBaseService:
-    """Static in-memory incident knowledge base for the POC."""
+    """Static in-memory incident knowledge base for the DevGuardian demo."""
 
     _INCIDENTS: List[str] = [
         "Issue #234: Route change from /users/:id to /api/v2/users/:id broke the mobile client.",
@@ -27,4 +27,3 @@ class KnowledgeBaseService:
         if "async task" in incident.lower():
             return ["async", "latency", "event loop"]
         return ["regression"]
-
