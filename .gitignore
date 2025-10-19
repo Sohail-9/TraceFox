@@ -10,5 +10,10 @@ __pycache__/
 .DS_Store
 env/
 venv/
+.next/
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/node_modules/
 .idea/
 .vscode/

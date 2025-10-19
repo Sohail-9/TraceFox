@@ -1,74 +1,119 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, status
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from services.api_gateway.service_registry import TraceFoxServiceRegistry, registry
+from services.shared.logging import setup_logging
+from services.shared.models import (
+    DriftDetectionRequest,
+    FeedbackPayload,
+    TestExecutionRequest,
+    TestGenerationRequestPayload,
+    WebhookPayload,
+)
 
-from services.agent_orchestrator.orchestrator import DevGuardianOrchestrator
-from services.event_processing.service import EventProcessingService
+setup_logging()
 
-
-class FilePayload(BaseModel):
-    path: str
-    content: str
-    language: str = "python"
-
-
-class CommitRequest(BaseModel):
-    commit_id: str
-    repository: str = "devguardian/demo"
-    author: str = "unknown"
-    timestamp: Optional[datetime] = None
-    branch: str = "main"
-    files: List[FilePayload]
+app = FastAPI(
+    title="TraceFox API Gateway",
+    version="3.0.0",
+    description="Entry point for TraceFox backend services.",
+)
 
 
-class DeploymentMetric(BaseModel):
-    name: str
-    value: float
-    unit: str = ""
+def get_registry() -> TraceFoxServiceRegistry:
+    return registry
 
 
-class DeploymentRequest(BaseModel):
-    deployment_id: str
-    commit_id: str
-    environment: str = "production"
-    timestamp: Optional[datetime] = None
-    metrics: List[DeploymentMetric] = []
+@app.post("/webhooks/{provider}", status_code=status.HTTP_202_ACCEPTED)
+async def handle_webhook(
+    provider: str,
+    payload: WebhookPayload,
+    svc: TraceFoxServiceRegistry = Depends(get_registry),
+) -> dict:
+    return await svc.process_webhook(provider, payload)
 
 
-app = FastAPI(title="DevGuardian Platform API", version="0.2.0")
-orchestrator = DevGuardianOrchestrator()
-event_service = EventProcessingService(orchestrator=orchestrator)
+@app.get("/reviews/pr/{pr_id}")
+async def get_pr_review(
+    pr_id: str = Path(..., description="Pull request identifier"),
+    include_tests: bool = Query(False),
+    include_rca: bool = Query(False),
+    svc: TraceFoxServiceRegistry = Depends(get_registry),
+) -> dict:
+    return await svc.get_pr_review(pr_id, include_tests, include_rca)
 
 
-@app.post("/demo/run")
-def run_demo(request: CommitRequest) -> Dict[str, Any]:
-    return orchestrator.run_pipeline(
-        commit_id=request.commit_id,
-        files=[file.model_dump() for file in request.files],
-    )
+@app.post("/tests/generate", status_code=status.HTTP_202_ACCEPTED)
+async def generate_tests(
+    request: TestGenerationRequestPayload,
+    svc: TraceFoxServiceRegistry = Depends(get_registry),
+) -> dict:
+    return await svc.generate_tests(request)
 
 
-@app.post("/events/commit")
-def commit_event(request: CommitRequest) -> Dict[str, Any]:
-    payload = request.model_dump()
-    if not payload["files"]:
-        raise HTTPException(status_code=400, detail="No files supplied for analysis.")
-    return event_service.handle_commit_event(payload)
+@app.post("/tests/execute", status_code=status.HTTP_202_ACCEPTED)
+async def execute_tests(
+    request: TestExecutionRequest,
+    svc: TraceFoxServiceRegistry = Depends(get_registry),
+) -> dict:
+    if not request.test_case_ids:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No test case ids provided")
+    return await svc.execute_tests(request)
 
 
-@app.post("/events/deployment")
-def deployment_event(request: DeploymentRequest) -> Dict[str, Any]:
-    payload = request.model_dump()
-    return event_service.handle_deployment_event(payload)
+@app.get("/tests/results/{execution_id}")
+async def get_test_results(
+    execution_id: str,
+    svc: TraceFoxServiceRegistry = Depends(get_registry),
+) -> dict:
+    return await svc.get_test_results(execution_id)
 
 
-@app.get("/analytics/latest")
-def latest_analytics() -> Dict[str, Any]:
-    report = orchestrator.latest_report()
-    if not report:
-        raise HTTPException(status_code=404, detail="No analytics report available yet.")
-    return report
+@app.get("/rca/{test_execution_id}")
+async def get_rca(
+    test_execution_id: str,
+    svc: TraceFoxServiceRegistry = Depends(get_registry),
+) -> dict:
+    return await svc.get_rca(test_execution_id)
+
+
+@app.post("/feedback", status_code=status.HTTP_201_CREATED)
+async def submit_feedback(
+    payload: FeedbackPayload,
+    svc: TraceFoxServiceRegistry = Depends(get_registry),
+) -> dict:
+    return await svc.submit_feedback(payload)
+
+
+@app.get("/tests/flaky")
+async def list_flaky_tests(
+    repository_id: str = Query(...),
+    threshold: float = Query(0.3, ge=0.0, le=1.0),
+    is_quarantined: bool | None = Query(None),
+    svc: TraceFoxServiceRegistry = Depends(get_registry),
+) -> dict:
+    return await svc.list_flaky_tests(repository_id, threshold, is_quarantined)
+
+
+@app.get("/compliance/{standard}")
+async def get_compliance_report(
+    standard: str,
+    repository_id: str = Query(...),
+    svc: TraceFoxServiceRegistry = Depends(get_registry),
+) -> dict:
+    return await svc.get_compliance(standard, repository_id)
+
+
+@app.post("/ml/drift/detect", status_code=status.HTTP_202_ACCEPTED)
+async def detect_data_drift(
+    request: DriftDetectionRequest,
+    svc: TraceFoxServiceRegistry = Depends(get_registry),
+) -> dict:
+    return await svc.detect_drift(request)
+
+
+@app.get("/healthz")
+async def healthcheck() -> dict:
+    return {"status": "ok"}
+
