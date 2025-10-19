@@ -8,6 +8,7 @@ DevGuardian is an AI-powered engineering intelligence platform that automates th
 - **Production monitoring**: Metric anomalies (latency, error rate, CPU) trigger alerts representing Isolation Forest/LSTM detection.
 - **Notifications & analytics**: Slack/email summaries and an analytics report highlight failures, anomalies, and next actions.
 - **User context & pricing tiers**: User Management returns plan entitlements and locale for model routing (e.g., Krutrim for Indian languages).
+- **Web dashboard**: Next.js UI surfaces commit, deployment, and anomaly insights in real time.
 
 ## Project Structure
 ```
@@ -137,6 +138,29 @@ scripts/deploy_azure.sh
 Optional overrides: `CPU`, `MEMORY_GB`, `MIN_REPLICAS`, `MAX_REPLICAS`, `KRUTRIM_MODEL`, `KRUTRIM_API_BASE_URL`, `DEEPSEEK_ROUTER_MODEL`.
 
 Inputs such as subnet IDs, security groups, or registry credentials must already exist or be provisioned separately.
+
+## Frontend Portal
+The `frontend/` directory hosts a Next.js 14 dashboard styled with Tailwind CSS. It consumes the FastAPI endpoints to display pipeline state, notifications, and production anomalies for engineers and stakeholders.
+
+### Install & Run
+```bash
+cd frontend
+npm install
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000 npm run dev
+```
+
+Or launch via the helper script:
+```bash
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000 scripts/dev_frontend.sh
+```
+Ensure the FastAPI server is running on port `8000` (or adjust `NEXT_PUBLIC_API_BASE_URL`).
+
+### Build for Deployment
+```bash
+cd frontend
+npm run build
+```
+The static export is written to `frontend/out/` and can be served from a CDN or uploaded behind the API gateway's `/static` mount.
 
 ## Extending the Proof-of-Concept
 - Replace heuristics with real model adapters (CodeLlama for AST, GPT-4/Claude for RCA, Krutrim for Indic coverage).

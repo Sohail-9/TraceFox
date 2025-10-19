@@ -35,6 +35,8 @@ class DevGuardianOrchestrator:
         self.analytics = AnalyticsService()
         self._latest_report: AnalyticsReport | None = None
         self._last_tests: List[TestExecutionResult] = []
+        self._last_commit_payload: Dict[str, Any] | None = None
+        self._last_deployment_payload: Dict[str, Any] | None = None
 
     def run_pipeline(self, commit_id: str, files: List[Dict[str, Any]]) -> Dict[str, Any]:
         file_changes = build_file_changes(files)
@@ -63,7 +65,7 @@ class DevGuardianOrchestrator:
         )
         self._latest_report = analytics_report
 
-        return {
+        result = {
             "code_analysis": {
                 "files": [self._serialize_dataclass(item) for item in analyses],
                 "summary": self._serialize_dataclass(analysis_payload["summary"]),
@@ -86,6 +88,7 @@ class DevGuardianOrchestrator:
             },
             "analytics": self._serialize_dataclass(analytics_report),
         }
+        return result
 
     def process_commit(self, event: CommitEvent) -> Dict[str, Any]:
         context = self.user_management.get_user_context(event.author)
@@ -99,6 +102,7 @@ class DevGuardianOrchestrator:
             "branch": event.branch,
             "timestamp": event.timestamp.isoformat(),
         }
+        self._last_commit_payload = payload
         return payload
 
     def process_deployment(
@@ -123,7 +127,7 @@ class DevGuardianOrchestrator:
         )
         self._latest_report = analytics_report
 
-        return {
+        payload = {
             "deployment": {
                 "deployment_id": event.deployment_id,
                 "commit_id": event.commit_id,
@@ -137,11 +141,20 @@ class DevGuardianOrchestrator:
             },
             "analytics": self._serialize_dataclass(analytics_report),
         }
+        self._last_deployment_payload = payload
+        return payload
 
     def latest_report(self) -> Dict[str, Any] | None:
         if not self._latest_report:
             return None
         return self._serialize_dataclass(self._latest_report)
+
+    def current_state(self) -> Dict[str, Any]:
+        return {
+            "latest_report": self.latest_report(),
+            "last_commit": self._last_commit_payload,
+            "last_deployment": self._last_deployment_payload,
+        }
 
     def _serialize_dataclass(self, item: Any) -> Dict[str, Any]:
         return asdict(item)
