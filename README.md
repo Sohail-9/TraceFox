@@ -1,169 +1,137 @@
-# TraceFox Backend (v3.0)
+# TraceFox Control Center
 
-TraceFox is an AI-powered PR review and test intelligence platform that provides complete codebase context for pull requests, generates targeted tests from root-cause insights, and delivers persona-aware analytics. This repository contains the redesigned backend aligned with the TraceFox 3.0 design document, including service scaffolding for code indexing, AI reviews, test orchestration, RCA, compliance, and continuous learning.
+TraceFox is the AI co-pilot for software delivery teams. We ingest pull-request activity, reason about code and tests, generate actionable insights, and close the loop with automated remediation. This repository bundles the v3 control center: a modular FastAPI backend, mission-control dashboard, and shared tooling designed to ship fast and scale with your team.
 
-## Architecture Overview
+---
 
-The backend follows a microservice-inspired layout built around FastAPI and asynchronous workers. Each domain exposes lightweight adapters and in-memory stores so the system can evolve towards production-grade integrations (PostgreSQL, Neo4j, Qdrant, Redis, RabbitMQ, etc.) without blocking day-to-day development.
+## Why TraceFox
+
+- **Ship with confidence** – automated reviews and deterministic test generation catch regressions before they land.
+- **Reduce firefighting** – flaky test detection and RCA summaries point engineers straight to the fix.
+- **Operate transparently** – performance, ML drift, compliance, and feedback metrics are available in one mission-control UI.
+
+TraceFox was built to be production-ready from day one: configuration via environment or config service, observability baked in, and services primed for cloud-native deployment.
+
+---
+
+## Architecture at a Glance
 
 ```
 services/
-  api_gateway/              # FastAPI entrypoint exposing TraceFox REST APIs
-  code_indexing/            # Repository cloning + AST/graph prep (simulated)
-  review_engine/            # Multi-model PR analysis stubs
-  test_generation/          # Targeted test synthesis from findings
-  test_execution/           # Parallel execution + aggregation scaffolding
-  rca_engine/               # Commit-correlation and RCA placeholder logic
-  learning_feedback/        # Feedback capture + approval scoring
-  compliance/               # Compliance coverage snapshots
-  observability/            # Metric aggregation (in-memory)
-  ml/                       # Data drift heuristics for ML pipelines
-  shared/                   # Config, connection pools, domain models, event bus
+  api_gateway/        # FastAPI entrypoint, fan-out to domain services
+  code_indexing/      # Repo ingest + graph/embedding prep (simulated)
+  review_engine/      # AI-powered PR analysis
+  test_generation/    # Deterministic test synthesis
+  test_execution/     # Parallel execution harness
+  rca_engine/         # Root-cause intelligence + recommendations
+  learning_feedback/  # Feedback capture + scoring
+  compliance/         # Standards coverage reporting
+  ml/                 # Drift detection heuristics
+  shared/             # Config, event bus, connection pools, utilities
+frontend/             # Next.js mission-control dashboard
+infrastructure/       # Terraform + compose scaffolding
 ```
 
-Key interactions:
-- Webhooks trigger indexing and AI review; findings are cached for PR retrieval.
-- Generated tests feed the execution service, which tracks outcomes and notifies the RCA engine.
-- RCA, flaky-test detection, compliance coverage, and drift detection surface via dedicated endpoints.
-- Feedback updates learning metrics that inform future prioritisation.
+Each service is intentionally lightweight: swap the in-memory stores for your preferred persistence, plug in real model endpoints, and you’re production-ready without rewiring the architecture.
 
-## Prerequisites
-- Python 3.10+
-- (Optional) Local services for PostgreSQL, Redis, Neo4j, Qdrant if you want to wire real backends.
+---
 
-## Environment configuration
+## Quickstart
 
-TraceFox pulls every runtime setting from environment variables. Copy the sample
-file, adjust values as needed, and keep the resulting `.env` outside of version
-control:
+1. **Clone & Create Env**
+   ```bash
+   git clone https://github.com/your-org/tracefox.git
+   cd tracefox
+   python -m venv .venv
+   source .venv/bin/activate
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   ```
 
-```bash
-cp .env.example .env
-```
+2. **Configure Runtime**
+   ```bash
+   cp .env.example .env
+   # edit .env or export via secrets manager
+   ```
+   All configuration lives behind the `TRACEFOX_` prefix. The sample file includes Redis, Neo4j, and Qdrant credentials that match `docker-compose.yml`.
 
-The provided docker-compose definitions read from `.env` to configure Redis,
-Neo4j, and Qdrant credentials. The API gateway and workers will also honour the
-same file when you export the variables locally (e.g. `set -a && source .env`).
+3. **Launch Local Services**
+   ```bash
+   docker compose up -d redis neo4j qdrant
+   uvicorn services.api_gateway.main:app --reload --port 8000
+   ```
 
-## Installation
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-```
+4. **Spin Up the Dashboard**
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
+   Visit `http://localhost:3000` to explore the mission-control experience.
 
-## Running the API Gateway
-```bash
-uvicorn services.api_gateway.main:app --reload --port 8000
-```
+---
 
-If you prefer ad-hoc exports, the critical local services should align with your
-`.env` values:
+## Developer Workflow
 
-```bash
-export TRACEFOX_REDIS__HOST=127.0.0.1
-export TRACEFOX_REDIS__PORT=6379
-export TRACEFOX_REDIS__PASSWORD=tracefox-redis-pass
-export TRACEFOX_NEO4J__URI=neo4j://127.0.0.1:7687
-export TRACEFOX_NEO4J__USER=neo4j
-export TRACEFOX_NEO4J__PASSWORD=tracefox-neo4j-pass
-export TRACEFOX_QDRANT__HOST=127.0.0.1
-export TRACEFOX_QDRANT__PORT=6333
-``` 
+| Task | Command |
+|------|---------|
+| Run backend tests | `python3 -m pytest` |
+| Run frontend tests | `cd frontend && npm run test` |
+| Lint frontend | `cd frontend && npm run lint` |
+| Sample webhook | see `docs/configuration.md` or use the in-app payload |
 
-### Core Endpoints
+The main flow (`tests/test_api_gateway.py`) exercises the complete webhook → review → test generation → execution path to guard regressions.
 
-| Method & Path | Description |
-| ------------- | ----------- |
-| `POST /webhooks/{provider}` | Intake PR webhooks (github/gitlab/bitbucket) and trigger indexing + review |
-| `GET /reviews/pr/{pr_id}` | Retrieve AI review summary, optionally including generated tests or RCA |
-| `POST /tests/generate` | Generate targeted tests for selected findings |
-| `POST /tests/execute` | Execute tests in parallel containers (simulated) |
-| `GET /tests/results/{execution_id}` | Fetch execution outcomes |
-| `GET /rca/{test_execution_id}` | Fetch or trigger RCA for a failed execution |
-| `GET /tests/flaky` | List flaky tests for a repository with threshold filters |
-| `GET /compliance/{standard}` | Retrieve or seed compliance coverage snapshots |
-| `POST /ml/drift/detect` | Run ML data drift detection heuristics |
-| `POST /feedback` | Submit thumbs-up/down feedback for AI outputs |
+---
 
-#### Trigger a webhook
-```bash
-curl -X POST http://localhost:8000/webhooks/github \
-  -H "Content-Type: application/json" \
-  -d '{
-        "event_type": "pull_request",
-        "action": "opened",
-        "repository": {
-          "id": "repo-123",
-          "name": "tracefox/backend",
-          "url": "https://github.com/tracefox/backend",
-          "default_branch": "main"
-        },
-        "pull_request": {
-          "number": 42,
-          "title": "Add payment compliance checks",
-          "author": "sohail",
-          "source_branch": "feature/compliance",
-          "target_branch": "main",
-          "diff_url": "https://github.com/tracefox/backend/pull/42.diff"
-        }
-      }'
-```
+## Configuration Matrix
 
-#### Generate and execute tests
-```bash
-# Generate tests for the PR above
-curl -X POST http://localhost:8000/tests/generate \
-  -H "Content-Type: application/json" \
-  -d '{
-        "pr_id": "repo-123:42",
-        "finding_ids": [],
-        "test_types": ["unit", "integration"],
-        "prioritize": true
-      }'
+Key environment knobs exposed via `services/shared/config.py`:
 
-# Execute tests using returned identifiers
-curl -X POST http://localhost:8000/tests/execute \
-  -H "Content-Type: application/json" \
-  -d '{
-        "pr_id": "repo-123:42",
-        "test_case_ids": ["<test-id-1>", "<test-id-2>"],
-        "parallel": true,
-        "timeout_seconds": 300
-      }'
-```
+| Namespace | Highlights |
+|-----------|------------|
+| `TRACEFOX_POSTGRES__*` | Connection pooling, timeouts, statement limits |
+| `TRACEFOX_REDIS__*` | Namespace versioning, TTLs, socket limits |
+| `TRACEFOX_QDRANT__*` | Persistence, replication, backup schedules |
+| `TRACEFOX_RETRY__*` / `TRACEFOX_CIRCUIT_BREAKER__*` | Backoff, jitter, breaker thresholds |
+| `TRACEFOX_OBSERVABILITY__*` | OTLP endpoints, sampling ratios |
+| `TRACEFOX_AI_MODELS__*` | Provider configs + default model temp |
+| `TRACEFOX_QUALITY__FLAKY_THRESHOLD` | Default flaky-test gate |
 
-#### Fetch downstream insights
-```bash
-curl http://localhost:8000/reviews/pr/repo-123:42?include_tests=true&include_rca=true
-curl http://localhost:8000/tests/results/<execution-id>
-curl http://localhost:8000/rca/<execution-id>
-curl http://localhost:8000/tests/flaky?repository_id=repo-123&threshold=0.25
-curl http://localhost:8000/compliance/pci_dss?repository_id=repo-123
-```
+Use `.env`, Vault/AppConfig, or any config service. Settings are cached but reloadable via `services.shared.config.reload_settings()`.
 
-### Configuration
-Environment variables can be prefixed with `TRACEFOX_` to override defaults in `services/shared/config.py`. Examples:
+---
 
-```bash
-export TRACEFOX_ENVIRONMENT=local
-export TRACEFOX_POSTGRES__HOST=localhost
-export TRACEFOX_REDIS__HOST=localhost
-export TRACEFOX_NEO4J__URI=neo4j://localhost:7687
-```
+## Mission-Control UI
 
-## Roadmap Alignment
-- **Phase 1 (MVP)**: API gateway, indexing, review, test generation/execution, and RCA skeletons are implemented here.
-- **Phase 2 (Differentiation)**: Stubs exist for flaky test management, ML drift detection, compliance mapping, and feedback loops.
-- **Phase 3 (Enterprise)**: Configuration and service boundaries are structured to plug into SSO, RBAC, observability, and multi-region deployments described in the design document.
+The dashboard showcases:
 
-## Next Steps
-- Wire actual PostgreSQL/Redis/Neo4j/Qdrant clients inside `services/shared/database.py` and replace in-memory stores.
-- Replace heuristic data generation with real AST parsing, embedding generation, and multi-model inference.
-- Extend `services/observability` to emit traces/metrics via OpenTelemetry (Jaeger/Prometheus).
-- Integrate message brokers (RabbitMQ/Kafka) using the `event_bus` abstraction.
-- Harden the testing story with pytest suites per service and contract tests across the API gateway.
+- **Pipeline Overview** – which stage (webhook, review, tests, execution, RCA) is active.
+- **Operational Pulse** – live stats (active PR, pass rate, RCA count).
+- **Onboarding Checklist** – first-time activation guidance.
+- **Insights** – tabbed views for findings, generated tests, and RCA summaries.
+- **Activity Feed** – toast-powered timeline of actions and alerts.
 
-## Frontend
-The `frontend/` directory still contains the existing Next.js portal. Update its API calls to align with the new endpoints when ready.
+Everything is powered via SWR hooks that call the FastAPI gateway, with toast notifications and skeleton loading states to keep the experience smooth.
+
+---
+
+## Roadmap Snapshot
+
+- **Today** – Full end-to-end storyline with simulators (AI review, tests, RCA), resilience primitives, event bus, and observability hooks.
+- **Next** – Swap simulators for real integrations (embedding pipelines, CI runners, auth providers), add contract testing and production-ready storage.
+- **Later** – Multi-tenant control planes, SSO/RBAC, advanced drift monitoring, and marketplace integrations.
+
+Have ideas? Open a discussion or PR—we’re building TraceFox in the open.
+
+---
+
+## Support
+
+Questions or integrations in mind?
+
+- 📚 `docs/configuration.md` – deep-dive into config expectations.
+- 🛠 Open an issue or join the TraceFox Slack.
+- ✉️ hello@tracefox.ai – partnerships, pilots, or investor demos.
+
+Let’s ship resilient software together. 🦊✨
