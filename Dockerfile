@@ -12,11 +12,8 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 COPY services ./services
 COPY scripts ./scripts
 
-ENV KRUTRIM_MODEL=Krutrim-DeepSeek-R1 \
-    KRUTRIM_API_BASE_URL=https://api.krutrim.com/v1 \
-    DEEPSEEK_ROUTER_MODEL=deepseek-r1
+ENV TRACEFOX_ENVIRONMENT=production
 
 EXPOSE 8000
 
 CMD ["uvicorn", "services.api_gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]
-

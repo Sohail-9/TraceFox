@@ -16,14 +16,14 @@ provider "aws" {
 locals {
   tags = merge(
     {
-      Project     = "DevGuardian"
+      Project     = "TraceFox"
       Environment = var.environment
     },
     var.additional_tags
   )
 }
 
-module "devguardian_service" {
+module "tracefox_service" {
   source = "../modules/container_service"
 
   name_prefix           = var.name_prefix
@@ -35,8 +35,4 @@ module "devguardian_service" {
   subnet_ids            = var.subnet_ids
   security_group_ids    = var.security_group_ids
   tags                  = local.tags
-  krutrim_model         = var.krutrim_model
-  krutrim_api_base_url  = var.krutrim_api_base_url
-  deepseek_router_model = var.deepseek_router_model
 }
-

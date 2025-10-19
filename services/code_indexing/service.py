@@ -33,7 +33,7 @@ class IndexingJob:
 
 
 class CodebaseIndexingService:
-    """Simulated codebase indexing pipeline hooking into Neo4j and LanceDB."""
+    """Simulated codebase indexing pipeline hooking into Neo4j and a vector store."""
 
     def __init__(self) -> None:
         self._jobs: Dict[str, IndexingJob] = {}

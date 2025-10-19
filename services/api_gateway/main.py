@@ -3,7 +3,9 @@ from __future__ import annotations
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, status
 
 from services.api_gateway.service_registry import TraceFoxServiceRegistry, registry
+from services.shared.config import ConfigurationError, get_settings
 from services.shared.logging import setup_logging
+from services.shared.observability import observability
 from services.shared.models import (
     DriftDetectionRequest,
     FeedbackPayload,
@@ -14,11 +16,15 @@ from services.shared.models import (
 
 setup_logging()
 
+observability.configure("api-gateway")
+
 app = FastAPI(
     title="TraceFox API Gateway",
     version="3.0.0",
     description="Entry point for TraceFox backend services.",
 )
+
+observability.instrument_fastapi(app)
 
 
 def get_registry() -> TraceFoxServiceRegistry:
@@ -89,11 +95,17 @@ async def submit_feedback(
 @app.get("/tests/flaky")
 async def list_flaky_tests(
     repository_id: str = Query(...),
-    threshold: float = Query(0.3, ge=0.0, le=1.0),
+    threshold: float | None = Query(None, ge=0.0, le=1.0),
     is_quarantined: bool | None = Query(None),
     svc: TraceFoxServiceRegistry = Depends(get_registry),
 ) -> dict:
-    return await svc.list_flaky_tests(repository_id, threshold, is_quarantined)
+    effective_threshold = threshold
+    if effective_threshold is None:
+        try:
+            effective_threshold = get_settings().quality.flaky_threshold
+        except ConfigurationError as exc:
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)) from exc
+    return await svc.list_flaky_tests(repository_id, effective_threshold, is_quarantined)
 
 
 @app.get("/compliance/{standard}")
@@ -116,4 +128,3 @@ async def detect_data_drift(
 @app.get("/healthz")
 async def healthcheck() -> dict:
     return {"status": "ok"}
-

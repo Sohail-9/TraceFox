@@ -15,6 +15,7 @@ from services.ml.service import DriftDetectionService
 from services.rca_engine.service import RCAEngine
 from services.review_engine.service import AIReviewEngine
 from services.shared.event_bus import event_bus
+from services.shared.resilience import execute_with_resilience
 from services.shared.models import (
     DriftDetectionRequest,
     FeedbackPayload,
@@ -63,7 +64,12 @@ class TraceFoxServiceRegistry:
                 incremental=payload.action == "synchronize",
             )
         )
-        review_summary = await self.review.run_review(pr_id, payload)
+        review_summary = await execute_with_resilience(
+            "ai-review.run",
+            self.review.run_review,
+            pr_id,
+            payload,
+        )
         await event_bus.publish(
             "api:webhook",
             {"provider": provider, "pr_id": pr_id, "review_id": review_summary.review_id},
@@ -99,7 +105,12 @@ class TraceFoxServiceRegistry:
 
     async def generate_tests(self, request: TestGenerationRequestPayload) -> Dict[str, Any]:
         review = await self.review.get_review(request.pr_id)
-        result = await self.test_generation.generate_tests(request, review)
+        result = await execute_with_resilience(
+            "test-generation.generate",
+            self.test_generation.generate_tests,
+            request,
+            review,
+        )
         tests = result.get("tests", [])
         tests_cast: List[TestCase] = []
         for test in tests:
@@ -131,7 +142,12 @@ class TraceFoxServiceRegistry:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, f"Test case {test_id} not found")
             selected_tests.append(test)
 
-        execution_summary = await self.test_execution.execute(request, selected_tests)
+        execution_summary = await execute_with_resilience(
+            "test-execution.run",
+            self.test_execution.execute,
+            request,
+            selected_tests,
+        )
         execution_id = execution_summary["execution_id"]
         full_result = await self.test_execution.get_execution(execution_id)
         assert full_result is not None  # nosec - ensured by execute
@@ -154,7 +170,12 @@ class TraceFoxServiceRegistry:
             result for result in full_result["results"] if result["status"] == "failed"
         ]
         if failed_tests:
-            await self.rca.analyse(execution_id, failed_tests)
+            await execute_with_resilience(
+                "rca.analyse",
+                self.rca.analyse,
+                execution_id,
+                failed_tests,
+            )
 
         execution_summary["results_url"] = f"/tests/results/{execution_id}"
         await event_bus.publish(

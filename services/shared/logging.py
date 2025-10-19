@@ -5,13 +5,18 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from services.shared.config import settings
+from services.shared.config import ConfigurationError, get_settings
 
 
 def setup_logging(level: Optional[int] = None) -> None:
+    try:
+        environment = get_settings().environment
+    except ConfigurationError:
+        environment = "unknown"
+
     effective_level = level
     if effective_level is None:
-        effective_level = logging.DEBUG if settings.environment == "local" else logging.INFO
+        effective_level = logging.DEBUG if environment == "local" else logging.INFO
     logging.basicConfig(
         level=effective_level,
         format=(

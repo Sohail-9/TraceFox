@@ -47,31 +47,13 @@ variable "tags" {
   default     = {}
 }
 
-variable "krutrim_model" {
-  type        = string
-  description = "Base Krutrim model to use in the container."
-  default     = "Krutrim-DeepSeek-R1"
-}
-
-variable "krutrim_api_base_url" {
-  type        = string
-  description = "Base URL for the Krutrim API."
-  default     = "https://api.krutrim.com/v1"
-}
-
-variable "deepseek_router_model" {
-  type        = string
-  description = "Router model name used when escalating workloads."
-  default     = "deepseek-r1"
-}
-
 resource "aws_ecs_cluster" "this" {
   name = "${var.name_prefix}-${var.environment}"
   tags = var.tags
 }
 
 resource "aws_cloudwatch_log_group" "this" {
-  name              = "/devguardian/${var.environment}"
+  name              = "/tracefox/${var.environment}"
   retention_in_days = 14
   tags              = var.tags
 }
@@ -114,7 +96,7 @@ resource "aws_ecs_task_definition" "this" {
 
   container_definitions = jsonencode([
     {
-      name      = "devguardian"
+      name      = "tracefox"
       image     = var.image
       essential = true
       portMappings = [
@@ -126,16 +108,8 @@ resource "aws_ecs_task_definition" "this" {
       ]
       environment = [
         {
-          name  = "KRUTRIM_MODEL"
-          value = var.krutrim_model
-        },
-        {
-          name  = "KRUTRIM_API_BASE_URL"
-          value = var.krutrim_api_base_url
-        },
-        {
-          name  = "DEEPSEEK_ROUTER_MODEL"
-          value = var.deepseek_router_model
+          name  = "TRACEFOX_ENVIRONMENT"
+          value = var.environment
         }
       ]
       logConfiguration = {
@@ -184,4 +158,3 @@ output "service_name" {
   value       = aws_ecs_service.this.name
   description = "Name of the ECS service."
 }
-
