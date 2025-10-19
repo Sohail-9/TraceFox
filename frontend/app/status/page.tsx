@@ -1,5 +1,4 @@
-"use client";
-
+import type { Metadata } from "next";
 import clsx from "clsx";
 import Link from "next/link";
 
@@ -51,6 +50,11 @@ const serviceStatuses = [
     detail: "Planned upgrade window 22:00-22:30 UTC. Metrics ingest paused; traces unaffected.",
   },
 ];
+
+export const metadata: Metadata = {
+  title: "TraceFox Status",
+  description: "Current health snapshot for TraceFox services.",
+};
 
 export default function StatusPage(): JSX.Element {
   return (

@@ -1,5 +1,4 @@
-"use client";
-
+import type { Metadata } from "next";
 import Link from "next/link";
 
 import { Card } from "@/components/Card";
@@ -66,6 +65,11 @@ const sections = [
     ],
   },
 ];
+
+export const metadata: Metadata = {
+  title: "TraceFox Docs",
+  description: "Operational handbook for the TraceFox control center.",
+};
 
 export default function DocsPage(): JSX.Element {
   return (
