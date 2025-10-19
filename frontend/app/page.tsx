@@ -1,31 +1,20 @@
-import { fetchJson } from "@/lib/api";
+"use client";
+
+import useSWR from "swr";
+import { swrFetcher, getApiBaseUrl } from "@/lib/api";
 import { Card } from "@/components/Card";
 import { KPIGrid } from "@/components/Kpis";
 import { Timeline } from "@/components/Timeline";
 import { NotificationList } from "@/components/Notifications";
+import { InsightList } from "@/components/InsightList";
 import type { AnalyticsReport, PipelineState } from "@/types/pipeline";
 
-async function getPipelineState(): Promise<PipelineState> {
-  try {
-    return await fetchJson<PipelineState>("/state");
-  } catch (error) {
-    console.error(error);
-    return {
-      latest_report: null,
-      last_commit: null,
-      last_deployment: null,
-    };
-  }
-}
+type TimelineItem = { title: string; timestamp?: string; details?: string[] };
 
-async function getLatestAnalytics(): Promise<AnalyticsReport | null> {
-  try {
-    return await fetchJson<AnalyticsReport>("/analytics/latest");
-  } catch (error) {
-    console.warn("No analytics report yet", error);
-    return null;
-  }
-}
+const refreshIntervals = {
+  state: 5000,
+  analytics: 10000,
+};
 
 function buildKpis(report: AnalyticsReport | null) {
   if (!report) {
@@ -52,17 +41,21 @@ function buildKpis(report: AnalyticsReport | null) {
   ];
 }
 
-function timelineFromState(state: PipelineState) {
-  const items: { title: string; timestamp?: string; details?: string[] }[] = [];
+function timelineFromState(state?: PipelineState | null): TimelineItem[] {
+  if (!state) {
+    return [];
+  }
 
+  const items: TimelineItem[] = [];
   const commit = state.last_commit as Record<string, any> | null;
   if (commit) {
     items.push({
-      title: `Commit ${commit.event?.repository ?? "repository"}`,
+      title: `Commit · ${commit.event?.repository ?? "repository"}`,
       timestamp: commit.event?.timestamp,
       details: [
         `Overall risk: ${commit.code_analysis?.summary?.overall_risk ?? "unknown"}`,
         `Generated tests: ${commit.test_generation?.tests?.length ?? 0}`,
+        `Model routing: ${commit.code_analysis?.summary?.model_used ?? "n/a"}`,
       ].filter(Boolean),
     });
   }
@@ -70,7 +63,7 @@ function timelineFromState(state: PipelineState) {
   const deployment = state.last_deployment as Record<string, any> | null;
   if (deployment) {
     items.push({
-      title: `Deployment ${deployment.deployment?.deployment_id ?? "event"}`,
+      title: `Deployment · ${deployment.deployment?.deployment_id ?? "event"}`,
       timestamp: deployment.deployment?.timestamp,
       details: (deployment.alerts as Array<Record<string, any>> | undefined)?.map(
         (alert) => `${alert.metric}: ${alert.observed} (baseline ${alert.baseline})`
@@ -81,75 +74,110 @@ function timelineFromState(state: PipelineState) {
   return items;
 }
 
-export default async function DashboardPage() {
-  const [state, latestAnalytics] = await Promise.all([
-    getPipelineState(),
-    getLatestAnalytics(),
-  ]);
+export default function DashboardPage() {
+  const {
+    data: state,
+    isLoading: stateLoading,
+    error: stateError,
+  } = useSWR<PipelineState>("/state", swrFetcher, {
+    refreshInterval: refreshIntervals.state,
+  });
 
-  const report = latestAnalytics ?? state.latest_report;
-  const kpis = buildKpis(report ?? null);
+  const { data: analytics } = useSWR<AnalyticsReport>("/analytics/latest", swrFetcher, {
+    refreshInterval: refreshIntervals.analytics,
+  });
+
+  const report = analytics ?? state?.latest_report ?? null;
+  const kpis = buildKpis(report);
   const insights = report?.insights ?? [];
-  const notifications = (state.last_commit as Record<string, any> | null)?.notification ??
-    (state.last_deployment as Record<string, any> | null)?.notification ?? null;
+  const notifications = (state?.last_commit as Record<string, any> | null)?.notification ??
+    (state?.last_deployment as Record<string, any> | null)?.notification ?? null;
   const timeline = timelineFromState(state);
+  const apiSource = getApiBaseUrl();
 
   return (
-    <main className="space-y-10">
-      <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h1 className="text-3xl font-semibold text-white">DevGuardian Control Center</h1>
-          <p className="mt-2 max-w-2xl text-sm text-slate-300">
-            Observe code intelligence, testing, and production telemetry in one place. The dashboard
-            auto-refreshes every few seconds to surface the most recent commit and deployment signals.
-          </p>
+    <div className="space-y-10">
+      <div className="grid gap-4 md:grid-cols-[1fr_auto] md:items-start">
+        <div className="space-y-2">
+          <p className="text-xs uppercase tracking-[0.35em] text-slate-400">Live overview</p>
+          <h2 className="text-2xl font-semibold text-white md:text-3xl">
+            Real-time intelligence across code, tests, and production
+          </h2>
         </div>
-        <div className="rounded-full border border-brand-400/40 bg-brand-500/10 px-4 py-2 text-xs uppercase tracking-wide text-brand-100">
-          API Source: {process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"}
+        <div className="flex items-center gap-3 rounded-full border border-slate-700/70 bg-slate-900/60 px-4 py-2 text-xs uppercase tracking-wide text-slate-300">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+          API Source: {apiSource}
         </div>
-      </header>
+      </div>
+
+      {stateError ? (
+        <div className="rounded-2xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-100">
+          Unable to connect to the DevGuardian API. Check that the backend is running at {apiSource}.
+        </div>
+      ) : null}
 
       <KPIGrid metrics={kpis} />
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <Card title="Latest Insights" accent="emerald">
-          {insights.length ? (
-            <ul className="list-disc space-y-2 pl-5">
-              {insights.map((insight) => (
-                <li key={insight} className="text-sm text-slate-200">
-                  {insight}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-slate-400">Insights appear once the pipeline has analyzed a commit.</p>
-          )}
+        <Card
+          title="Latest Insights"
+          accent="emerald"
+          icon={<span>✨</span>}
+          action={<span>{report ? "Updated" : "Awaiting"}</span>}
+        >
+          <InsightList insights={insights} />
         </Card>
 
-        <Card title="Notifications" accent="rose">
+        <Card
+          title="Notifications"
+          accent="rose"
+          icon={<span>🔔</span>}
+          action={<span>Auto refresh: {refreshIntervals.state / 1000}s</span>}
+        >
           <NotificationList notifications={notifications} />
         </Card>
 
-        <Card title="Production Alerts" accent="amber">
-          {timeline.filter((item) => item.title.startsWith("Deployment")).flatMap((item) => item.details ?? []).length ? (
-            <ul className="list-disc space-y-2 pl-5 text-sm text-slate-100">
-              {timeline
-                .filter((item) => item.title.startsWith("Deployment"))
-                .flatMap((item) => item.details ?? [])
-                .map((detail) => (
-                  <li key={detail}>{detail}</li>
-                ))}
-            </ul>
-          ) : (
-            <p className="text-sm text-slate-400">No anomalies detected in the last deployment.</p>
-          )}
+        <Card
+          title="Production Alerts"
+          accent="amber"
+          icon={<span>🚨</span>}
+          action={<span>{report?.anomalies_detected ?? 0} active</span>}
+        >
+          {timeline
+            .filter((item) => item.title.startsWith("Deployment"))
+            .flatMap((item) => item.details ?? []).length ? (
+              <ul className="space-y-2 text-sm text-slate-100">
+                {timeline
+                  .filter((item) => item.title.startsWith("Deployment"))
+                  .flatMap((item) => item.details ?? [])
+                  .map((detail) => (
+                    <li
+                      key={detail}
+                      className="rounded-xl border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-amber-100"
+                    >
+                      {detail}
+                    </li>
+                  ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-slate-400">No anomalies detected in the last deployment.</p>
+            )}
         </Card>
       </div>
 
-      <Card title="Lifecycle Timeline" accent="brand" footer="Trace commits through tests, debugging, and deployments.">
-        <Timeline items={timeline} />
+      <Card
+        title="Lifecycle Timeline"
+        accent="brand"
+        icon={<span>🛠️</span>}
+        action={<span>{timeline.length || 0} events</span>}
+        footer="Trace commits through tests, debugging, and deployments."
+      >
+        {stateLoading && !state ? (
+          <p className="animate-pulse text-sm text-slate-400">Loading latest pipeline events…</p>
+        ) : (
+          <Timeline items={timeline} />
+        )}
       </Card>
-    </main>
+    </div>
   );
 }
-
