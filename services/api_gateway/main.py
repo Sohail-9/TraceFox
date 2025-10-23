@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI, HTTPException, Path, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Path, Query, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 
+from services.api_gateway.routes.auth import require_user, router as auth_router
+from services.api_gateway.routes.github import router as github_router
 from services.api_gateway.service_registry import TraceFoxServiceRegistry, registry
+from services.shared.auth import AuthenticatedUser
 from services.shared.config import ConfigurationError, get_settings
 from services.shared.logging import setup_logging
 from services.shared.observability import observability
@@ -17,6 +21,7 @@ from services.shared.models import (
 setup_logging()
 
 observability.configure("api-gateway")
+settings = get_settings()
 
 app = FastAPI(
     title="TraceFox API Gateway",
@@ -24,7 +29,21 @@ app = FastAPI(
     description="Entry point for TraceFox backend services.",
 )
 
+allowed_origins = list(settings.api_gateway_allowed_origins or [])
+if not allowed_origins:
+    allowed_origins = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=True,
+)
+
 observability.instrument_fastapi(app)
+app.include_router(auth_router)
+app.include_router(github_router)
 
 
 def get_registry() -> TraceFoxServiceRegistry:
@@ -40,11 +59,25 @@ async def handle_webhook(
     return await svc.process_webhook(provider, payload)
 
 
+@app.options("/webhooks/{provider}")
+async def webhook_preflight(provider: str) -> Response:
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.get("/operations/console")
+async def get_operations_console(
+    current_user: AuthenticatedUser = Depends(require_user),
+    svc: TraceFoxServiceRegistry = Depends(get_registry),
+) -> dict:
+    return await svc.get_operations_snapshot()
+
+
 @app.get("/reviews/pr/{pr_id}")
 async def get_pr_review(
     pr_id: str = Path(..., description="Pull request identifier"),
     include_tests: bool = Query(False),
     include_rca: bool = Query(False),
+    current_user: AuthenticatedUser = Depends(require_user),
     svc: TraceFoxServiceRegistry = Depends(get_registry),
 ) -> dict:
     return await svc.get_pr_review(pr_id, include_tests, include_rca)
@@ -53,6 +86,7 @@ async def get_pr_review(
 @app.post("/tests/generate", status_code=status.HTTP_202_ACCEPTED)
 async def generate_tests(
     request: TestGenerationRequestPayload,
+    current_user: AuthenticatedUser = Depends(require_user),
     svc: TraceFoxServiceRegistry = Depends(get_registry),
 ) -> dict:
     return await svc.generate_tests(request)
@@ -61,6 +95,7 @@ async def generate_tests(
 @app.post("/tests/execute", status_code=status.HTTP_202_ACCEPTED)
 async def execute_tests(
     request: TestExecutionRequest,
+    current_user: AuthenticatedUser = Depends(require_user),
     svc: TraceFoxServiceRegistry = Depends(get_registry),
 ) -> dict:
     if not request.test_case_ids:
@@ -71,6 +106,7 @@ async def execute_tests(
 @app.get("/tests/results/{execution_id}")
 async def get_test_results(
     execution_id: str,
+    current_user: AuthenticatedUser = Depends(require_user),
     svc: TraceFoxServiceRegistry = Depends(get_registry),
 ) -> dict:
     return await svc.get_test_results(execution_id)
@@ -79,6 +115,7 @@ async def get_test_results(
 @app.get("/rca/{test_execution_id}")
 async def get_rca(
     test_execution_id: str,
+    current_user: AuthenticatedUser = Depends(require_user),
     svc: TraceFoxServiceRegistry = Depends(get_registry),
 ) -> dict:
     return await svc.get_rca(test_execution_id)
@@ -87,6 +124,7 @@ async def get_rca(
 @app.post("/feedback", status_code=status.HTTP_201_CREATED)
 async def submit_feedback(
     payload: FeedbackPayload,
+    current_user: AuthenticatedUser = Depends(require_user),
     svc: TraceFoxServiceRegistry = Depends(get_registry),
 ) -> dict:
     return await svc.submit_feedback(payload)
@@ -97,6 +135,7 @@ async def list_flaky_tests(
     repository_id: str = Query(...),
     threshold: float | None = Query(None, ge=0.0, le=1.0),
     is_quarantined: bool | None = Query(None),
+    current_user: AuthenticatedUser = Depends(require_user),
     svc: TraceFoxServiceRegistry = Depends(get_registry),
 ) -> dict:
     effective_threshold = threshold
@@ -112,6 +151,7 @@ async def list_flaky_tests(
 async def get_compliance_report(
     standard: str,
     repository_id: str = Query(...),
+    current_user: AuthenticatedUser = Depends(require_user),
     svc: TraceFoxServiceRegistry = Depends(get_registry),
 ) -> dict:
     return await svc.get_compliance(standard, repository_id)
@@ -120,6 +160,7 @@ async def get_compliance_report(
 @app.post("/ml/drift/detect", status_code=status.HTTP_202_ACCEPTED)
 async def detect_data_drift(
     request: DriftDetectionRequest,
+    current_user: AuthenticatedUser = Depends(require_user),
     svc: TraceFoxServiceRegistry = Depends(get_registry),
 ) -> dict:
     return await svc.detect_drift(request)

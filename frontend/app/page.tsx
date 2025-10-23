@@ -7,35 +7,28 @@ import useSWR from "swr";
 import { Card } from "@/components/Card";
 import { Skeleton } from "@/components/Skeleton";
 import { useToast } from "@/components/ToastProvider";
-import { getApiBaseUrl, postJson, swrFetcher } from "@/lib/api";
+import { fetchJson, getApiBaseUrl, postJson, swrFetcher } from "@/lib/api";
+import { fetchGitHubRepositories, fetchTrackedRepositories, trackGitHubRepository } from "@/lib/github";
+import {
+  SessionState,
+  SessionUser,
+  clearSession,
+  loadSession,
+  rememberOAuthState,
+  storeSession,
+} from "@/lib/session";
 import type {
   GenerateTestsResponse,
   RCAResponse,
+  OperationsSnapshot,
   ReviewSummary,
   TestExecutionSummary,
   TestResultsResponse,
   WebhookResponse,
+  GitHubRepositorySummary,
+  GitHubTrackedRepository,
+  GitHubCloneJob,
 } from "@/types/backend";
-
-const DEFAULT_WEBHOOK_PAYLOAD = {
-  event_type: "pull_request",
-  action: "opened",
-  repository: {
-    id: "repo-123",
-    name: "tracefox/backend",
-    url: "https://github.com/tracefox/backend",
-    default_branch: "main",
-  },
-  pull_request: {
-    number: 42,
-    title: "Add compliance checks",
-    author: "sohail",
-    source_branch: "feature/compliance",
-    target_branch: "main",
-    diff_url: "https://github.com/tracefox/backend/pull/42.diff",
-  },
-  files: [],
-};
 
 const SEVERITY_STYLES: Record<string, string> = {
   critical: "border-rose-400/50 bg-rose-500/10 text-rose-100",
@@ -79,6 +72,7 @@ const EXECUTION_BREAKDOWN_STYLES: Record<string, string> = {
   Skipped: "bg-slate-500",
 };
 
+
 type PipelineStatus = "done" | "active" | "pending";
 
 interface PipelineStep {
@@ -107,6 +101,19 @@ interface ActivityItem {
   title: string;
   detail: string;
   tone: ActivityTone;
+  timestamp?: string;
+}
+
+interface GitHubLoginResponse {
+  authorization_url: string;
+  state: string;
+}
+
+interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  user: SessionUser;
+  github_token?: string | null;
 }
 
 function formatTimestamp(value?: string) {
@@ -118,14 +125,41 @@ function formatTimestamp(value?: string) {
 
 export default function DashboardPage(): JSX.Element {
   const { addToast } = useToast();
+  const [session, setSession] = useState<SessionState | null>(null);
+  useEffect(() => {
+    if (session) {
+      storeSession(session.token, session.user);
+    }
+  }, [session]);
+  const [hydrated, setHydrated] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [provider, setProvider] = useState("github");
   const [webhookBody, setWebhookBody] = useState(() =>
-    JSON.stringify(DEFAULT_WEBHOOK_PAYLOAD, null, 2)
+    JSON.stringify({
+      event_type: "pull_request",
+      action: "opened",
+      repository: {
+        id: "",
+        name: "",
+        url: "",
+        default_branch: "main"
+      },
+      pull_request: {
+        number: "",
+        title: "",
+        author: "",
+        source_branch: "",
+        target_branch: "main",
+        diff_url: ""
+      },
+      files: []
+    }, null, 2)
   );
   const [webhookStatus, setWebhookStatus] = useState<string | null>(null);
   const [webhookError, setWebhookError] = useState<string | null>(null);
   const [activePrId, setActivePrId] = useState<string | null>(null);
-  const [prInput, setPrInput] = useState("repo-123:42");
+  const [prInput, setPrInput] = useState("");
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -139,8 +173,29 @@ export default function DashboardPage(): JSX.Element {
     tests: false,
     execution: false,
   });
+  const [githubRepos, setGithubRepos] = useState<GitHubRepositorySummary[]>([]);
+  const [githubReposLoading, setGithubReposLoading] = useState(false);
+  const [trackedRepos, setTrackedRepos] = useState<GitHubTrackedRepository[]>([]);
+  const [cloneJobs, setCloneJobs] = useState<GitHubCloneJob[]>([]);
+  const [trackedLoading, setTrackedLoading] = useState(false);
+  const [githubSearch, setGithubSearch] = useState("");
+  const [githubError, setGithubError] = useState<string | null>(null);
+  const isAuthenticated = hydrated && Boolean(session);
 
-  const reviewKey = activePrId
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const syncSession = () => {
+      setSession(loadSession());
+    };
+    syncSession();
+    setHydrated(true);
+    window.addEventListener("storage", syncSession);
+    return () => {
+      window.removeEventListener("storage", syncSession);
+    };
+  }, []);
+
+  const reviewKey = activePrId && isAuthenticated
     ? `/reviews/pr/${encodeURIComponent(
         activePrId
       )}?include_tests=true&include_rca=true`
@@ -159,22 +214,40 @@ export default function DashboardPage(): JSX.Element {
     data: executionResults,
     isLoading: executionLoading,
   } = useSWR<TestResultsResponse>(
-    executionId ? `/tests/results/${executionId}` : null,
+    executionId && isAuthenticated ? `/tests/results/${executionId}` : null,
     swrFetcher,
     {
-      refreshInterval: executionId ? 4000 : 0,
+      refreshInterval: executionId && isAuthenticated ? 4000 : 0,
       revalidateOnFocus: false,
     }
   );
 
   const { data: rca } = useSWR<RCAResponse>(
-    executionId ? `/rca/${executionId}` : null,
+    executionId && isAuthenticated ? `/rca/${executionId}` : null,
     swrFetcher,
     {
-      refreshInterval: executionId ? 6000 : 0,
+      refreshInterval: executionId && isAuthenticated ? 6000 : 0,
       revalidateOnFocus: false,
     }
   );
+
+  const operationsKey = isAuthenticated ? "/operations/console" : null;
+  const { data: operations, mutate: mutateOperations } = useSWR<OperationsSnapshot>(
+    operationsKey,
+    swrFetcher,
+    {
+      refreshInterval: 8000,
+      revalidateOnFocus: false,
+    }
+  );
+
+  const userInitials = useMemo(() => {
+    const login = session?.user?.login ?? "";
+    if (!login) return "TF";
+    const stripped = login.replace(/[^a-zA-Z0-9]/g, "");
+    const initials = stripped.slice(0, 2) || login.slice(0, 2);
+    return initials.toUpperCase();
+  }, [session?.user?.login]);
 
   useEffect(() => {
     if (activePrId) {
@@ -207,6 +280,218 @@ export default function DashboardPage(): JSX.Element {
   }, [executionResults]);
 
   useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+    const login = session?.user?.login;
+    if (!login) {
+      return;
+    }
+    setWebhookBody((current) => {
+      try {
+        const parsed = JSON.parse(current);
+        const currentAuthor = parsed?.pull_request?.author;
+        if (!currentAuthor) {
+          const updated = {
+            ...parsed,
+            pull_request: {
+              ...parsed.pull_request,
+              author: login,
+            },
+          };
+          return JSON.stringify(updated, null, 2);
+        }
+        return current;
+      } catch {
+        return current;
+      }
+    });
+  }, [hydrated, session?.user?.login]);
+
+  const handleLogin = useCallback(async () => {
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      const response = await fetchJson<GitHubLoginResponse>("/auth/github/login");
+      if (response.authorization_url.startsWith("dev://")) {
+        setAuthError(
+          "GitHub OAuth dev_mode is enabled on the backend. Provide real OAuth credentials and disable dev_mode to use GitHub sign-in."
+        );
+        addToast({
+          tone: "info",
+          title: "Dev mode detected",
+          description:
+            "Update TRACEFOX_AUTH__GITHUB__* values and set TRACEFOX_AUTH__GITHUB__DEV_MODE=false to enable real GitHub authentication.",
+        });
+        return;
+      }
+      rememberOAuthState(response.state);
+      window.location.href = response.authorization_url;
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to start the GitHub sign-in flow.";
+      setAuthError(message);
+      addToast({
+        tone: "error",
+        title: "Sign-in failed",
+        description: message,
+      });
+    } finally {
+      setAuthLoading(false);
+    }
+  }, [addToast]);
+
+  const handleLogout = useCallback(async () => {
+    clearSession();
+    setSession(null);
+    setActivePrId(null);
+    setExecutionId(null);
+    setStepsCompleted({
+      webhook: false,
+      review: false,
+      tests: false,
+      execution: false,
+    });
+    setWebhookStatus(null);
+    setWebhookError(null);
+    setActionMessage(null);
+    setActionError(null);
+    setWebhookBody(JSON.stringify({
+      event_type: "pull_request",
+      action: "opened",
+      repository: {
+        id: "",
+        name: "",
+        url: "",
+        default_branch: "main",
+      },
+      pull_request: {
+        number: "",
+        title: "",
+        author: "",
+        source_branch: "",
+        target_branch: "main",
+        diff_url: "",
+      },
+      files: [],
+    }, null, 2));
+    await mutateReview(undefined, false);
+    await mutateOperations(undefined, false);
+    setGithubRepos([]);
+    setTrackedRepos([]);
+    setCloneJobs([]);
+    setGithubSearch("");
+    addToast({
+      tone: "info",
+      title: "Signed out",
+      description: "You have been signed out of TraceFox.",
+    });
+  }, [addToast, mutateOperations, mutateReview]);
+
+  const refreshTrackedRepositories = useCallback(async () => {
+    setTrackedLoading(true);
+    try {
+      const response = await fetchTrackedRepositories();
+      setTrackedRepos(response.repositories ?? []);
+      setCloneJobs(response.clone_jobs ?? []);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to load tracked repositories.";
+      setGithubError(message);
+      addToast({
+        tone: "error",
+        title: "Repository load failed",
+        description: message,
+      });
+    } finally {
+      setTrackedLoading(false);
+    }
+  }, [addToast]);
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      void refreshTrackedRepositories();
+    } else {
+      setGithubRepos([]);
+      setTrackedRepos([]);
+      setCloneJobs([]);
+      setGithubError(null);
+    }
+  }, [isAuthenticated, refreshTrackedRepositories]);
+
+  const loadGithubRepositories = useCallback(async () => {
+    setGithubReposLoading(true);
+    setGithubError(null);
+    try {
+      const response = await fetchGitHubRepositories();
+      setGithubRepos(response.repositories ?? []);
+      await refreshTrackedRepositories();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to load GitHub repositories.";
+      setGithubError(message);
+      addToast({
+        tone: "error",
+        title: "GitHub fetch failed",
+        description: message,
+      });
+    } finally {
+      setGithubReposLoading(false);
+    }
+  }, [addToast, refreshTrackedRepositories]);
+
+  const handleTrackRepository = useCallback(
+    async (fullName: string) => {
+      try {
+        setGithubError(null);
+        await trackGitHubRepository(fullName);
+        addToast({
+          tone: "success",
+          title: "Repository queued",
+          description: `${fullName} scheduled for cloning and indexing.`,
+        });
+        await refreshTrackedRepositories();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unable to track repository.";
+        setGithubError(message);
+        addToast({
+          tone: "error",
+          title: "Tracking failed",
+          description: message,
+        });
+      }
+    },
+    [addToast, refreshTrackedRepositories]
+  );
+
+  const trackedByFullName = useMemo(() => {
+    const map = new Map<string, GitHubTrackedRepository>();
+    trackedRepos.forEach((repo) => {
+      map.set(repo.full_name, repo);
+    });
+    return map;
+  }, [trackedRepos]);
+
+  const filteredGithubRepos = useMemo(() => {
+    const term = githubSearch.trim().toLowerCase();
+    const base = term
+      ? githubRepos.filter((repo) => repo.full_name.toLowerCase().includes(term) || repo.description?.toLowerCase().includes(term))
+      : githubRepos;
+    return base.slice(0, 25);
+  }, [githubRepos, githubSearch]);
+
+  const cloneStatusBadge = useCallback((status: string) => {
+    const tone = {
+      queued: "border-amber-400/50 bg-amber-500/10 text-amber-100",
+      running: "border-brand-400/50 bg-brand-500/10 text-brand-100",
+      cloned: "border-emerald-400/50 bg-emerald-500/10 text-emerald-100",
+      completed: "border-emerald-400/50 bg-emerald-500/10 text-emerald-100",
+      failed: "border-rose-400/50 bg-rose-500/10 text-rose-100",
+    } as const;
+    return tone[status as keyof typeof tone] ?? "border-slate-600/60 bg-slate-900/60 text-slate-200";
+  }, []);
+
+  useEffect(() => {
     if (reviewError) {
       const message =
         reviewError instanceof Error
@@ -219,6 +504,55 @@ export default function DashboardPage(): JSX.Element {
       });
     }
   }, [addToast, reviewError]);
+
+  useEffect(() => {
+    if (operations?.active_pr_id) {
+      setActivePrId((current) =>
+        current === operations.active_pr_id ? current : operations.active_pr_id
+      );
+    }
+  }, [operations?.active_pr_id]);
+
+  useEffect(() => {
+    if (operations?.checklist) {
+      setStepsCompleted(operations.checklist);
+    }
+  }, [operations?.checklist]);
+
+  useEffect(() => {
+    const latestExecution = operations?.executions?.latest;
+    if (latestExecution?.execution_id && !executionId) {
+      setExecutionId(latestExecution.execution_id);
+    }
+  }, [executionId, operations?.executions?.latest]);
+
+  const activePrMetadata = useMemo<OperationsSnapshot["pr_registry"][number] | null>(() => {
+    const id = operations?.active_pr_id;
+    if (!id) return null;
+    return operations?.pr_registry?.find((entry) => entry.pr_id === id) ?? null;
+  }, [operations?.active_pr_id, operations?.pr_registry]);
+
+  const latestPayload = operations?.latest_payload ?? null;
+
+const latestPayloadTimestamp = useMemo(() => {
+  const received = activePrMetadata?.received_at;
+  return typeof received === "string" ? formatTimestamp(received) : "";
+}, [activePrMetadata?.received_at]);
+
+const focusedPrId = activePrId ?? operations?.active_pr_id ?? null;
+const summaryPerPr = operations?.summary?.per_pr ?? {};
+const activeSummary = focusedPrId ? summaryPerPr[focusedPrId] : undefined;
+
+const activePrDisplay = useMemo(() => {
+  if (activePrMetadata) {
+    const repo = activePrMetadata.repository_name ?? activePrMetadata.repository_id ?? "";
+    const prNumber = activePrMetadata.pull_request_number;
+    const main = prNumber ? `${repo} #${prNumber}` : repo || activePrId || "—";
+      const subtitle = activePrMetadata.pull_request_title ?? undefined;
+      return { main, subtitle };
+    }
+    return { main: activePrId ?? "—", subtitle: undefined };
+  }, [activePrId, activePrMetadata]);
 
   const apiSource = getApiBaseUrl();
   const findings = review?.findings ?? [];
@@ -234,11 +568,15 @@ export default function DashboardPage(): JSX.Element {
   }, [review?.rca, rca]);
 
   const pipelineSteps = useMemo<PipelineStep[]>(() => {
-    const webhookDone = Boolean(activePrId || webhookStatus);
-    const reviewDone = Boolean(review);
-    const testsDone = tests.length > 0;
-    const executionDone = Boolean(executionResults);
-    const rcaDone = rcaItems.length > 0;
+    const webhookDone =
+      stepsCompleted.webhook || Boolean(focusedPrId) || Boolean(webhookStatus);
+    const reviewDone = stepsCompleted.review || Boolean(review) || Boolean(activeSummary);
+    const testsDone =
+      stepsCompleted.tests || tests.length > 0 || (focusedPrId ? (operations?.tests?.per_pr?.[focusedPrId] ?? 0) > 0 : false);
+    const executionDone =
+      stepsCompleted.execution || Boolean(executionResults) || (focusedPrId ? (operations?.executions?.per_pr_counts?.[focusedPrId] ?? 0) > 0 : false);
+    const rcaDone =
+      rcaItems.length > 0 || (focusedPrId ? (operations?.rca?.per_pr_counts?.[focusedPrId] ?? 0) > 0 : false);
 
     const stepStatus = (complete: boolean, previousComplete: boolean): PipelineStatus => {
       if (complete) return "done";
@@ -277,16 +615,24 @@ export default function DashboardPage(): JSX.Element {
         status: stepStatus(rcaDone, executionDone),
       },
     ];
-  }, [activePrId, executionResults, rcaItems.length, review, tests.length, webhookStatus]);
+  }, [activeSummary, executionResults, focusedPrId, operations?.executions?.per_pr_counts, operations?.rca?.per_pr_counts, operations?.tests?.per_pr, rcaItems.length, review, stepsCompleted, tests.length, webhookStatus]);
 
   const passRate = useMemo(() => {
-    if (!executionResults || executionResults.total_tests === 0) {
-      return null;
+    if (executionResults && executionResults.total_tests > 0) {
+      return Math.round(
+        (executionResults.passed / executionResults.total_tests) * 100
+      );
     }
-    return Math.round(
-      (executionResults.passed / executionResults.total_tests) * 100
-    );
-  }, [executionResults]);
+    const latestExecutionForActive = focusedPrId
+      ? operations?.executions?.latest_per_pr?.[focusedPrId]
+      : undefined;
+    if (latestExecutionForActive && latestExecutionForActive.total_tests > 0) {
+      return Math.round(
+        (latestExecutionForActive.passed / latestExecutionForActive.total_tests) * 100
+      );
+    }
+    return null;
+  }, [executionResults, focusedPrId, operations?.executions?.latest_per_pr]);
 
   const summaryStats = useMemo<SummaryStat[]>(() => {
     const passTone: StatTone =
@@ -298,25 +644,31 @@ export default function DashboardPage(): JSX.Element {
         ? "amber"
         : "rose";
 
+    const critical = review?.critical_count ?? activeSummary?.critical ?? 0;
+    const major = review?.major_count ?? activeSummary?.major ?? 0;
+    const minor = review?.minor_count ?? activeSummary?.minor ?? 0;
+    const generatedTests = tests.length || (focusedPrId ? operations?.tests?.per_pr?.[focusedPrId] ?? 0 : 0);
+    const latestExecution = executionResults ?? (focusedPrId ? operations?.executions?.latest_per_pr?.[focusedPrId] ?? null : null);
+
     return [
       {
         id: "critical",
         label: "Critical",
-        value: String(review?.critical_count ?? 0),
+        value: String(critical),
         description: "Blocking issues that must be resolved before merge",
         tone: "rose",
       },
       {
         id: "major",
         label: "Major",
-        value: String(review?.major_count ?? 0),
+        value: String(major),
         description: "High-impact findings affecting reliability or security",
         tone: "amber",
       },
       {
         id: "tests",
         label: "Generated Tests",
-        value: String(tests.length),
+        value: String(generatedTests),
         description: "Ready-to-run suites mapped to review findings",
         tone: "brand",
       },
@@ -324,39 +676,60 @@ export default function DashboardPage(): JSX.Element {
         id: "pass-rate",
         label: "Pass Rate",
         value: passRate !== null ? `${passRate}%` : "—",
-        description: executionResults
-          ? `Latest run of ${executionResults.total_tests} tests`
+        description: latestExecution
+          ? `Latest run of ${latestExecution.total_tests ?? 0} tests`
           : "Awaiting the next execution",
         tone: passTone,
       },
     ];
-  }, [executionResults, passRate, review, tests.length]);
+  }, [activeSummary, executionResults, focusedPrId, operations?.executions?.latest_per_pr, operations?.tests?.per_pr, passRate, review, tests.length]);
 
   const quickStats = useMemo(
-    () => [
-      {
-        label: "Active PR",
-        value: activePrId ?? "—",
-        description: "Current repository under review",
-      },
-      {
-        label: "Tests Generated",
-        value: String(tests.length),
-        description: "TraceFox-managed cases ready to execute",
-      },
-      {
-        label: "RCA Insights",
-        value: String(rcaItems.length),
-        description: "Actionable remediation reports available",
-      },
-      {
-        label: "Pass Rate",
-        value: passRate !== null ? `${passRate}%` : "—",
-        description: "Latest execution success ratio",
-      },
-    ],
-    [activePrId, passRate, rcaItems.length, tests.length]
+    () => {
+      const provider = activePrMetadata?.provider;
+      const testsGenerated = tests.length || (focusedPrId ? operations?.tests?.per_pr?.[focusedPrId] ?? 0 : 0);
+      const rcaCount = rcaItems.length || (focusedPrId ? operations?.rca?.per_pr_counts?.[focusedPrId] ?? 0 : 0);
+      const activeDescription = activePrMetadata?.pull_request_title
+        ?? (provider ? `Source provider: ${provider}` : "Current repository under review");
+      return [
+        {
+          label: "Active PR",
+          value: activePrDisplay.main,
+          description: activeDescription,
+        },
+        {
+          label: "Tests Generated",
+          value: String(testsGenerated),
+          description: "TraceFox-managed cases ready to execute",
+        },
+        {
+          label: "RCA Insights",
+          value: String(rcaCount),
+          description: "Actionable remediation reports available",
+        },
+        {
+          label: "Pass Rate",
+          value: passRate !== null ? `${passRate}%` : "—",
+          description: "Latest execution success ratio",
+        },
+      ];
+    },
+    [activePrDisplay.main, activePrMetadata, focusedPrId, operations?.rca?.per_pr_counts, operations?.tests?.per_pr, passRate, rcaItems.length, tests.length]
   );
+
+  const latestExecutionForActive = focusedPrId
+    ? operations?.executions?.latest_per_pr?.[focusedPrId]
+    : undefined;
+
+  const executionStatusValue = executionResults
+    ? executionResults.status
+    : executionId
+    ? "Awaiting results"
+    : latestExecutionForActive
+    ? latestExecutionForActive.status ?? "Completed"
+    : "Idle";
+
+  const rcaCountForActive = rcaItems.length || (focusedPrId ? operations?.rca?.per_pr_counts?.[focusedPrId] ?? 0 : 0);
 
   const checklistItems = useMemo(
     () => [
@@ -408,9 +781,25 @@ export default function DashboardPage(): JSX.Element {
   );
 
   const activityItems = useMemo<ActivityItem[]>(() => {
-    const items: ActivityItem[] = [];
+    const serverItems = (operations?.activity ?? []).map((item) => {
+      const tone = Object.prototype.hasOwnProperty.call(
+        ACTIVITY_TONE_STYLES,
+        item.tone
+      )
+        ? (item.tone as ActivityTone)
+        : ("neutral" as ActivityTone);
+      return {
+        id: item.id,
+        title: item.title,
+        detail: item.detail,
+        tone,
+        timestamp: item.timestamp,
+      };
+    });
+
+    const clientItems: ActivityItem[] = [];
     if (webhookStatus) {
-      items.push({
+      clientItems.push({
         id: "webhook-success",
         title: "Webhook accepted",
         detail: webhookStatus,
@@ -418,7 +807,7 @@ export default function DashboardPage(): JSX.Element {
       });
     }
     if (webhookError) {
-      items.push({
+      clientItems.push({
         id: "webhook-error",
         title: "Webhook failed",
         detail: webhookError,
@@ -426,7 +815,7 @@ export default function DashboardPage(): JSX.Element {
       });
     }
     if (actionMessage) {
-      items.push({
+      clientItems.push({
         id: "action-success",
         title: "Workflow updated",
         detail: actionMessage,
@@ -434,7 +823,7 @@ export default function DashboardPage(): JSX.Element {
       });
     }
     if (actionError) {
-      items.push({
+      clientItems.push({
         id: "action-error",
         title: "Action required",
         detail: actionError,
@@ -442,7 +831,7 @@ export default function DashboardPage(): JSX.Element {
       });
     }
     if (reviewLoading) {
-      items.push({
+      clientItems.push({
         id: "review-loading",
         title: "Review loading",
         detail: "Fetching AI insights for the selected pull request…",
@@ -450,7 +839,7 @@ export default function DashboardPage(): JSX.Element {
       });
     }
     if (review) {
-      items.push({
+      clientItems.push({
         id: `review-${review.review_id}`,
         title: "Review ready",
         detail: `${review.total_findings} findings surfaced for PR ${review.pr_id}`,
@@ -459,7 +848,7 @@ export default function DashboardPage(): JSX.Element {
     }
     if (executionResults) {
       const failed = executionResults.failed > 0;
-      items.push({
+      clientItems.push({
         id: `execution-${executionResults.execution_id}`,
         title: "Execution update",
         detail: `${executionResults.status} · Passed ${executionResults.passed}/${executionResults.total_tests}`,
@@ -467,18 +856,19 @@ export default function DashboardPage(): JSX.Element {
       });
     }
     if (rcaItems.length) {
-      items.push({
+      clientItems.push({
         id: `rca-${rcaItems[0].id}`,
         title: "RCA insights ready",
         detail: `${rcaItems.length} remediation recommendations generated`,
         tone: "info",
       });
     }
-    return items;
+    return [...clientItems, ...serverItems];
   }, [
     actionError,
     actionMessage,
     executionResults,
+    operations?.activity,
     review,
     reviewLoading,
     rcaItems,
@@ -509,6 +899,7 @@ export default function DashboardPage(): JSX.Element {
         payload
       );
       setWebhookStatus(response.message ?? "Webhook accepted.");
+      await mutateOperations();
       setStepsCompleted((prev) => ({ ...prev, webhook: true }));
       addToast({
         tone: "success",
@@ -588,6 +979,7 @@ export default function DashboardPage(): JSX.Element {
         description: `TraceFox prepared ${total} tests.`,
       });
       await mutateReview();
+      await mutateOperations();
     } catch (error) {
       const message =
         error instanceof Error
@@ -636,6 +1028,7 @@ export default function DashboardPage(): JSX.Element {
         description: `Running ${summary.total_tests} tests in parallel.`,
       });
       await mutateReview();
+      await mutateOperations();
     } catch (error) {
       const message =
         error instanceof Error
@@ -666,8 +1059,71 @@ export default function DashboardPage(): JSX.Element {
 
   const executionTotal = executionResults?.total_tests ?? 0;
 
+  if (!hydrated) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-slate-100">
+        <Card title="TraceFox" accent="brand" className="max-w-md border border-slate-800 bg-slate-900/70 p-8">
+          <div className="space-y-4">
+            <p className="text-sm text-slate-300">Preparing your workspace…</p>
+            <Skeleton className="h-3 w-32" />
+            <Skeleton className="h-3 w-full" />
+            <Skeleton className="h-3 w-3/4" />
+          </div>
+        </Card>
+      </main>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-slate-100">
+        <Card
+          title="Connect GitHub"
+          accent="brand"
+          className="max-w-md border border-slate-800 bg-slate-900/70 p-8"
+        >
+          <div className="space-y-6">
+            <div className="space-y-2">
+              <p className="text-xs uppercase tracking-[0.4em] text-slate-400">
+                TraceFox Mission Control
+              </p>
+              <h1 className="text-3xl font-semibold text-white">
+                Sign in with GitHub
+              </h1>
+              <p className="text-sm text-slate-300">
+                Connect your GitHub account to authorise TraceFox for automated
+                reviews, deterministic testing, and remediation workflows.
+              </p>
+            </div>
+            {authError ? (
+              <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+                {authError}
+              </div>
+            ) : null}
+            <button
+              type="button"
+              onClick={handleLogin}
+              disabled={authLoading}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-white/95 px-4 py-3 text-sm font-semibold text-slate-900 shadow-lg shadow-brand-500/20 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {authLoading ? "Redirecting to GitHub…" : "Continue with GitHub"}
+            </button>
+            <p className="text-xs text-slate-500">
+              TraceFox only uses your GitHub identity to orchestrate code reviews
+              and testing automation. You can revoke access at any time from your
+              GitHub account settings.
+            </p>
+          </div>
+        </Card>
+      </main>
+    );
+  }
+
+  const currentSession = session as SessionState;
+
   return (
-    <div className="space-y-10 pb-16">
+    <main className="min-h-screen bg-slate-950 p-6 text-slate-100">
+      <div className="mx-auto flex max-w-7xl flex-col gap-10 pb-16">
       <section className="relative overflow-hidden rounded-3xl border border-slate-800 bg-slate-950/60 p-8 shadow-[0_0_80px_-32px_rgba(79,70,229,0.45)]">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(79,70,229,0.35),transparent)]" />
         <div className="relative z-10 flex flex-col gap-8 md:flex-row md:items-center md:justify-between">
@@ -685,6 +1141,29 @@ export default function DashboardPage(): JSX.Element {
             </p>
           </div>
           <div className="flex w-full flex-col gap-4 md:max-w-xs">
+            <div className="rounded-2xl border border-brand-400/40 bg-brand-500/10 px-4 py-4 text-sm text-brand-50 shadow-inner shadow-brand-500/20">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-brand-200">Signed in as</p>
+                  <p className="mt-1 text-lg font-semibold text-white">
+                    {currentSession.user.login}
+                  </p>
+                  {currentSession.user.email ? (
+                    <p className="text-xs text-brand-100/80">{currentSession.user.email}</p>
+                  ) : null}
+                </div>
+                <div className="flex h-12 w-12 items-center justify-center rounded-full border border-brand-400/40 bg-brand-500/20 text-sm font-semibold text-white">
+                  {userInitials}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="mt-4 w-full rounded-xl border border-brand-400/40 bg-brand-500/20 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-brand-50 transition hover:bg-brand-500/30"
+              >
+                Sign out
+              </button>
+            </div>
             <div className="rounded-2xl border border-slate-700/70 bg-slate-900/70 px-4 py-3 text-xs uppercase tracking-wide text-slate-300">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-slate-400">API Source</span>
@@ -702,14 +1181,19 @@ export default function DashboardPage(): JSX.Element {
                 </span>
               </div>
             </div>
-            {activePrId ? (
-              <div className="rounded-2xl border border-brand-500/40 bg-brand-500/10 px-4 py-3 text-xs uppercase tracking-wide text-brand-100">
+            <div className="rounded-2xl border border-brand-500/40 bg-brand-500/10 px-4 py-3 text-xs uppercase tracking-wide text-brand-100">
+              <div className="flex flex-col gap-1">
                 <div className="flex items-center justify-between gap-2">
                   <span>Active PR</span>
-                  <span>{activePrId}</span>
+                  <span>{activePrDisplay.main}</span>
                 </div>
+                {activePrDisplay.subtitle ? (
+                  <p className="text-[11px] normal-case text-brand-50/80">
+                    {activePrDisplay.subtitle}
+                  </p>
+                ) : null}
               </div>
-            ) : null}
+            </div>
           </div>
         </div>
       </section>
@@ -782,6 +1266,204 @@ export default function DashboardPage(): JSX.Element {
         </Card>
       </div>
 
+      <Card
+        title="Repository Sync"
+        accent="brand"
+        icon={<span>📂</span>}
+        className="border-brand-500/50"
+        action={
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void refreshTrackedRepositories()}
+              disabled={trackedLoading}
+              className="rounded-xl border border-emerald-400/60 bg-emerald-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-100 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {trackedLoading ? "Refreshing…" : "Refresh Tracked"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void loadGithubRepositories()}
+              disabled={githubReposLoading}
+              className="rounded-xl border border-brand-400/60 bg-brand-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-brand-100 transition hover:bg-brand-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {githubReposLoading ? "Loading…" : "Load Repositories"}
+            </button>
+          </div>
+        }
+      >
+        {githubError ? (
+          <div className="rounded-xl border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">
+            {githubError}
+          </div>
+        ) : null}
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-100/80">
+                Available Repositories
+              </h3>
+              <span className="text-[11px] text-slate-400">
+                {githubRepos.length ? `${githubRepos.length} fetched` : "Not loaded"}
+              </span>
+            </div>
+            <div className="relative">
+              <input
+                value={githubSearch}
+                onChange={(event) => setGithubSearch(event.target.value)}
+                placeholder="Search repositories…"
+                className="w-full rounded-xl border border-slate-700 bg-slate-950/80 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-brand-400 focus:outline-none"
+              />
+            </div>
+            {githubReposLoading ? (
+              <div className="space-y-2">
+                <Skeleton className="h-12 w-full" />
+                <Skeleton className="h-12 w-full" />
+                <Skeleton className="h-12 w-full" />
+              </div>
+            ) : filteredGithubRepos.length === 0 ? (
+              <p className="text-sm text-slate-300/80">
+                {githubRepos.length
+                  ? "No repositories match your search."
+                  : "Use the Load button to fetch your GitHub repositories."}
+              </p>
+            ) : (
+              <ul className="space-y-2 text-sm">
+                {filteredGithubRepos.map((repo) => {
+                  const tracked = trackedByFullName.get(repo.full_name);
+                  return (
+                    <li
+                      key={repo.id}
+                      className="rounded-xl border border-slate-700/60 bg-slate-900/70 p-3 shadow-inner shadow-black/10"
+                    >
+                      <div className="flex flex-col gap-2">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-semibold text-white">{repo.full_name}</p>
+                            {repo.description ? (
+                              <p className="text-xs text-slate-300/80">{repo.description}</p>
+                            ) : null}
+                            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-slate-400">
+                              <span>{repo.default_branch}</span>
+                              <span>{repo.private ? "Private" : "Public"}</span>
+                            </div>
+                          </div>
+                          <div className="flex flex-col items-end gap-2">
+                            <a
+                              href={repo.html_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs text-brand-200 hover:text-brand-50"
+                            >
+                              View on GitHub ↗
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() => void handleTrackRepository(repo.full_name)}
+                              disabled={Boolean(tracked)}
+                              className={clsx(
+                                "rounded-lg border px-3 py-1 text-xs font-semibold transition",
+                                tracked
+                                  ? "cursor-not-allowed border-slate-700 bg-slate-900/60 text-slate-500"
+                                  : "border-brand-400/60 bg-brand-500/10 text-brand-100 hover:bg-brand-500/20"
+                              )}
+                            >
+                              {tracked ? "Tracking" : "Track"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-brand-100/80">
+                Tracked Repositories
+              </h3>
+              <span className="text-[11px] text-slate-400">
+                {trackedRepos.length ? `${trackedRepos.length} tracked` : "None"}
+              </span>
+            </div>
+            {trackedLoading && !trackedRepos.length ? (
+              <div className="space-y-2">
+                <Skeleton className="h-12 w-full" />
+                <Skeleton className="h-12 w-full" />
+              </div>
+            ) : trackedRepos.length === 0 ? (
+              <p className="text-sm text-slate-300/80">
+                Track a repository to kick off cloning and indexing. Clone jobs will appear here with live status.
+              </p>
+            ) : (
+              <ul className="space-y-2 text-sm">
+                {trackedRepos.map((repo) => (
+                  <li
+                    key={repo.repo_id}
+                    className="rounded-xl border border-slate-700/60 bg-slate-900/70 p-3 shadow-inner shadow-black/10"
+                  >
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold text-white">{repo.full_name}</p>
+                          {repo.clone_path ? (
+                            <p className="text-[11px] text-slate-400/80">Cloned to {repo.clone_path}</p>
+                          ) : null}
+                        </div>
+                        <span
+                          className={clsx(
+                            "rounded-full px-3 py-1 text-[11px] uppercase tracking-wide",
+                            cloneStatusBadge(repo.sync_status)
+                          )}
+                        >
+                          {repo.sync_status}
+                        </span>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {cloneJobs.length ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs uppercase tracking-wide text-slate-400">Recent Clone Jobs</p>
+                  <span className="text-[11px] text-slate-500">Showing latest {Math.min(cloneJobs.length, 5)}</span>
+                </div>
+                <ul className="space-y-2 text-xs text-slate-200">
+                  {cloneJobs.slice(0, 5).map((job) => (
+                    <li
+                      key={job.job_id}
+                      className="rounded-xl border border-slate-700/60 bg-slate-900/70 px-3 py-2"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex flex-col">
+                          <span className="font-semibold text-white">{job.full_name}</span>
+                          <span className="text-[11px] text-slate-400/80">{job.job_id}</span>
+                        </div>
+                        <span
+                          className={clsx(
+                            "rounded-full px-3 py-1 text-[11px] uppercase tracking-wide",
+                            cloneStatusBadge(job.status)
+                          )}
+                        >
+                          {job.status}
+                        </span>
+                      </div>
+                      {job.message ? (
+                        <p className="mt-2 text-[11px] text-rose-200/80">{job.message}</p>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </Card>
+
       <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
         <Card title="Pipeline Overview" accent="brand" icon={<span>🛰️</span>}>
           <ol className="space-y-4">
@@ -834,149 +1516,7 @@ export default function DashboardPage(): JSX.Element {
         </Card>
       </div>
 
-      <Card
-        title="Operations Console"
-        accent="brand"
-        icon={<span>🛠️</span>}
-        footer="Use sample payloads to iterate quickly, then replay real PR webhooks from your Git provider for full-fidelity validation."
-      >
-        <div className="grid gap-8 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
-          <form className="space-y-4" onSubmit={handleWebhookSubmit}>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <label className="text-xs uppercase tracking-wide text-slate-300">
-                  Provider
-                </label>
-                <select
-                  value={provider}
-                  onChange={(event) => setProvider(event.target.value)}
-                  className="w-32 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-sm text-slate-200 focus:border-brand-400 focus:outline-none"
-                >
-                  <option value="github">github</option>
-                  <option value="gitlab">gitlab</option>
-                  <option value="bitbucket">bitbucket</option>
-                </select>
-              </div>
-              <button
-                type="button"
-                onClick={() =>
-                  setWebhookBody(JSON.stringify(DEFAULT_WEBHOOK_PAYLOAD, null, 2))
-                }
-                className="rounded-xl border border-slate-700 bg-slate-950 px-3 py-1 text-xs font-semibold text-slate-300 transition hover:border-brand-400 hover:text-white"
-              >
-                Reset payload
-              </button>
-            </div>
-            <textarea
-              value={webhookBody}
-              onChange={(event) => setWebhookBody(event.target.value)}
-              spellCheck={false}
-              rows={16}
-              className="w-full rounded-2xl border border-slate-800 bg-slate-950/80 p-4 font-mono text-xs leading-relaxed text-slate-200 shadow-inner shadow-black/40 focus:border-brand-400 focus:outline-none"
-            />
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="submit"
-                disabled={loadingAction === "webhook"}
-                className="inline-flex items-center justify-center rounded-xl bg-brand-500 px-4 py-2 text-sm font-semibold text-white shadow transition hover:bg-brand-400 disabled:cursor-not-allowed disabled:bg-brand-700"
-              >
-                {loadingAction === "webhook" ? "Submitting…" : "Send Webhook"}
-              </button>
-              {webhookStatus ? (
-                <span className="text-xs text-emerald-300">{webhookStatus}</span>
-              ) : null}
-              {webhookError ? (
-                <span className="text-xs text-rose-300">{webhookError}</span>
-              ) : null}
-            </div>
-          </form>
-
-          <div className="space-y-6">
-            <form className="space-y-4" onSubmit={handleLoadReview}>
-              <label className="flex flex-col gap-2 text-xs uppercase tracking-wide text-slate-300">
-                Pull Request Identifier
-                <input
-                  value={prInput}
-                  onChange={(event) => setPrInput(event.target.value)}
-                  placeholder="repo-id:pr-number"
-                  className="rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-emerald-400 focus:outline-none"
-                />
-              </label>
-              <button
-                type="submit"
-                disabled={loadingAction === "load"}
-                className="inline-flex items-center justify-center rounded-xl bg-emerald-500 px-4 py-2 text-sm font-semibold text-white shadow transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-emerald-700"
-              >
-                {loadingAction === "load" ? "Loading…" : "Load Review"}
-              </button>
-            </form>
-
-            <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 shadow-inner shadow-black/30">
-              <p className="text-xs uppercase tracking-wide text-slate-400">
-                Quick actions
-              </p>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <button
-                  type="button"
-                  onClick={handleGenerateTests}
-                  disabled={loadingAction === "generate" || !review}
-                  className="inline-flex items-center justify-center rounded-xl border border-emerald-400/60 bg-emerald-500/10 px-4 py-2 text-sm font-semibold text-emerald-100 shadow transition hover:border-emerald-300 hover:text-emerald-50 disabled:cursor-not-allowed disabled:border-slate-700 disabled:text-slate-500"
-                >
-                  {loadingAction === "generate" ? "Generating…" : "Generate Tests"}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleExecuteTests}
-                  disabled={loadingAction === "execute" || !review}
-                  className="inline-flex items-center justify-center rounded-xl border border-brand-400/60 bg-brand-500/10 px-4 py-2 text-sm font-semibold text-brand-100 shadow transition hover:border-brand-300 hover:text-brand-50 disabled:cursor-not-allowed disabled:border-slate-700 disabled:text-slate-500"
-                >
-                  {loadingAction === "execute" ? "Executing…" : "Execute Tests"}
-                </button>
-              </div>
-              {actionMessage ? (
-                <p className="mt-3 text-xs text-emerald-300">{actionMessage}</p>
-              ) : null}
-              {actionError ? (
-                <p className="mt-3 text-xs text-rose-300">{actionError}</p>
-              ) : null}
-              {reviewError ? (
-                <p className="mt-3 text-xs text-rose-300">
-                  {reviewError instanceof Error
-                    ? reviewError.message
-                    : "Unable to load review."}
-                </p>
-              ) : null}
-              {reviewLoading && !review ? (
-                <p className="mt-3 text-xs text-slate-400">Fetching review details…</p>
-              ) : null}
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-2">
-              <StatusBadge
-                label="Review Status"
-                value={review ? "Ready" : reviewLoading ? "Loading…" : "Awaiting load"}
-              />
-              <StatusBadge
-                label="Execution Status"
-                value={
-                  executionResults
-                    ? executionResults.status
-                    : executionId
-                    ? "Awaiting results"
-                    : "Idle"
-                }
-              />
-              <StatusBadge
-                className="md:col-span-2"
-                label="RCA Insights"
-                value={
-                  rcaItems.length ? `${rcaItems.length} available` : "Pending execution"
-                }
-              />
-            </div>
-          </div>
-        </div>
-      </Card>
+        {/* Removed Operations Console section */}
 
       <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
         <Card title="Insights" accent="rose" icon={<span>🧠</span>}>
@@ -1048,14 +1588,19 @@ export default function DashboardPage(): JSX.Element {
                     "rounded-2xl border px-4 py-3 shadow-inner shadow-black/30",
                     ACTIVITY_TONE_STYLES[item.tone]
                   )}
-                >
-                  <p className="text-xs uppercase tracking-wide text-slate-200/80">
-                    {item.title}
+              >
+                <p className="text-xs uppercase tracking-wide text-slate-200/80">
+                  {item.title}
+                </p>
+                {item.timestamp ? (
+                  <p className="text-[10px] uppercase tracking-wide text-slate-400/80">
+                    {formatTimestamp(item.timestamp)}
                   </p>
-                  <p className="mt-1 text-slate-100/90">{item.detail}</p>
-                </li>
-              ))}
-            </ul>
+                ) : null}
+                <p className="mt-1 text-slate-100/90">{item.detail}</p>
+              </li>
+            ))}
+          </ul>
           ) : (
             <p className="text-sm text-slate-400">
               Initiate a webhook or load an existing PR to populate the activity feed.
@@ -1084,7 +1629,8 @@ export default function DashboardPage(): JSX.Element {
           ) : null}
         </Card>
       ) : null}
-    </div>
+      </div>
+    </main>
   );
 }
 

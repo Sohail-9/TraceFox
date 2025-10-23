@@ -10,6 +10,7 @@ type CardProps = {
   action?: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
+  className?: string;
 };
 
 const ACCENT_CLASSES: Record<NonNullable<CardProps["accent"]>, string> = {
@@ -20,12 +21,21 @@ const ACCENT_CLASSES: Record<NonNullable<CardProps["accent"]>, string> = {
   slate: "border-slate-700/60 bg-slate-900/60",
 };
 
-export function Card({ title, accent = "slate", icon, action, children, footer }: CardProps) {
+export function Card({
+  title,
+  accent = "slate",
+  icon,
+  action,
+  children,
+  footer,
+  className,
+}: CardProps) {
   return (
     <section
       className={clsx(
         "rounded-3xl border p-6 shadow-xl shadow-slate-950/40 backdrop-blur transition hover:-translate-y-0.5 hover:shadow-2xl",
-        ACCENT_CLASSES[accent]
+        ACCENT_CLASSES[accent],
+        className
       )}
     >
       <header className="mb-5 flex items-center justify-between gap-4">

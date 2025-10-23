@@ -7,12 +7,16 @@ import math
 import random
 import time
 from dataclasses import dataclass
+from datetime import timedelta
 from threading import RLock
 from typing import Any, Awaitable, Callable, Dict, Generic, Optional, TypeVar
 
 from aiobreaker import CircuitBreaker, CircuitBreakerError, CircuitBreakerListener
 from tenacity import AsyncRetrying, RetryCallState, stop_after_attempt, stop_after_delay
-from tenacity.wait import WaitBaseStrategy
+try:
+    from tenacity.wait import WaitBaseStrategy
+except ImportError:  # tenacity<9.0
+    from tenacity.wait import wait_base as WaitBaseStrategy  # type: ignore[assignment]
 
 from services.shared.config import ConfigurationError, get_settings
 
@@ -103,8 +107,7 @@ class ResilienceOrchestrator(Generic[T]):
             fail_max = max(1, math.ceil(cfg.minimum_number_of_calls * cfg.failure_rate_threshold))
             breaker = CircuitBreaker(
                 fail_max=fail_max,
-                reset_timeout=cfg.wait_duration_in_open_state_seconds,
-                half_open_max_calls=cfg.permitted_calls_in_half_open_state,
+                timeout_duration=timedelta(seconds=cfg.wait_duration_in_open_state_seconds),
                 listeners=[ResilienceListener()],
                 name=name,
             )

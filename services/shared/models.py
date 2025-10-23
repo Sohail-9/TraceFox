@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -181,3 +181,47 @@ class DriftDetectionRequest(BaseModel):
     reference_data_url: str
     current_data_url: str
     features: List[str] = Field(default_factory=list)
+
+
+class GitHubRepositoryOwner(BaseModel):
+    login: str
+
+
+class GitHubRepositorySummary(BaseModel):
+    id: int
+    full_name: str
+    description: Optional[str] = None
+    clone_url: str
+    default_branch: str
+    html_url: str
+    private: bool
+    owner: GitHubRepositoryOwner
+
+
+class GitHubTrackedRepository(BaseModel):
+    repo_id: int
+    full_name: str
+    description: Optional[str] = None
+    clone_url: str
+    default_branch: str
+    html_url: str
+    private: bool
+    clone_path: Optional[str] = None
+    sync_status: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class GitHubCloneJob(BaseModel):
+    job_id: str
+    full_name: str
+    status: str
+    message: Optional[str] = None
+    clone_path: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class GitHubRepositoryTrackResponse(BaseModel):
+    repository: GitHubTrackedRepository
+    clone_job: Dict[str, Any]

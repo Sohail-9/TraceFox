@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-from typing import Any, DefaultDict, Dict, List, Optional
+from collections import defaultdict, deque
+from datetime import datetime
+from typing import Any, DefaultDict, Deque, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import HTTPException, status
 
 from services.code_indexing.service import CodebaseIndexingService, IndexingRequest
+from services.code_indexing.git_repository_manager import GitRepositoryManager
 from services.compliance.service import ComplianceService
 from services.learning_feedback.service import LearningFeedbackService
 from services.ml.service import DriftDetectionService
@@ -19,6 +21,9 @@ from services.shared.resilience import execute_with_resilience
 from services.shared.models import (
     DriftDetectionRequest,
     FeedbackPayload,
+    GitHubRepositorySummary,
+    GitHubRepositoryTrackResponse,
+    GitHubTrackedRepository,
     TestCase,
     TestExecutionRequest,
     TestGenerationRequestPayload,
@@ -41,20 +46,47 @@ class TraceFoxServiceRegistry:
         self.compliance = ComplianceService()
         self.drift = DriftDetectionService()
 
-        self._pr_registry: Dict[str, Dict[str, str]] = {}
+        self._pr_registry: Dict[str, Dict[str, Any]] = {}
         self._tests_by_pr: DefaultDict[str, List[TestCase]] = defaultdict(list)
         self._test_index: Dict[str, TestCase] = {}
         self._executions_by_pr: DefaultDict[str, List[str]] = defaultdict(list)
         self._flaky_stats: DefaultDict[str, Dict[str, Dict[str, int]]] = defaultdict(
             lambda: defaultdict(lambda: {"pass": 0, "fail": 0, "flaky": 0})
         )
+        self._execution_index: Dict[str, str] = {}
+        self._activity: Deque[Dict[str, str]] = deque(maxlen=50)
+        self._latest_pr_id: Optional[str] = None
+        self._latest_execution_id: Optional[str] = None
+        self.repositories = GitRepositoryManager(indexing_service=self.indexing)
+
+    def _log_activity(self, *, tone: str, title: str, detail: str) -> None:
+        self._activity.appendleft(
+            {
+                "id": str(uuid4()),
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "tone": tone,
+                "title": title,
+                "detail": detail,
+            }
+        )
 
     async def process_webhook(self, provider: str, payload: WebhookPayload) -> Dict[str, Any]:
         pr_id = self._pr_identifier(payload)
+        payload_snapshot = payload.model_dump()
         self._pr_registry[pr_id] = {
             "provider": provider,
             "repository_id": payload.repository.id,
+            "repository_name": payload.repository.name,
+            "repository_url": str(payload.repository.url),
+            "pull_request_number": payload.pull_request.number,
+            "pull_request_title": payload.pull_request.title,
+            "pull_request_author": payload.pull_request.author,
+            "action": payload.action,
+            "event_type": payload.event_type,
+            "received_at": payload.timestamp.isoformat(),
+            "payload": payload_snapshot,
         }
+        self._latest_pr_id = pr_id
 
         indexing_job = await self.indexing.queue_indexing(
             IndexingRequest(
@@ -73,6 +105,11 @@ class TraceFoxServiceRegistry:
         await event_bus.publish(
             "api:webhook",
             {"provider": provider, "pr_id": pr_id, "review_id": review_summary.review_id},
+        )
+        self._log_activity(
+            tone="success",
+            title="Webhook processed",
+            detail=f"PR {pr_id} via {provider} initiated review",
         )
         return {
             "status": "accepted",
@@ -126,11 +163,30 @@ class TraceFoxServiceRegistry:
             "tests:generate",
             {"pr_id": request.pr_id, "job_id": job_id, "total": result.get("total_generated", 0)},
         )
+        self._log_activity(
+            tone="info",
+            title="Tests generated",
+            detail=f"PR {request.pr_id}: {len(tests_cast)} test(s) prepared",
+        )
         return {
             "job_id": job_id,
             "test_cases": [test_case.model_dump() for test_case in tests_cast],
             "total_generated": result.get("total_generated", len(tests_cast)),
         }
+
+    async def list_tracked_repositories(self, user_id: str) -> Dict[str, Any]:
+        return await self.repositories.list_tracked(user_id)
+
+    async def onboard_repository(
+        self,
+        user_id: str,
+        github_token: str,
+        repo_payload: GitHubRepositorySummary,
+    ) -> GitHubRepositoryTrackResponse:
+        record = await self.repositories.register_repository(user_id, repo_payload.model_dump())
+        clone_job = await self.repositories.schedule_clone(user_id=user_id, repo_data=repo_payload.model_dump(), github_token=github_token)
+        repo_model = GitHubTrackedRepository.model_validate(record)
+        return GitHubRepositoryTrackResponse(repository=repo_model, clone_job=clone_job)
 
     async def execute_tests(self, request: TestExecutionRequest) -> Dict[str, Any]:
         available_tests = self._tests_by_pr.get(request.pr_id, [])
@@ -154,6 +210,8 @@ class TraceFoxServiceRegistry:
 
         repository_id = self._repository_for_pr(request.pr_id)
         self._executions_by_pr[request.pr_id].append(execution_id)
+        self._execution_index[execution_id] = request.pr_id
+        self._latest_execution_id = execution_id
         for result in full_result["results"]:
             stats = self._flaky_stats[repository_id][result["test_case_id"]]
             status_key = {
@@ -187,6 +245,12 @@ class TraceFoxServiceRegistry:
                 "failed": len(failed_tests),
             },
         )
+        tone = "success" if not failed_tests else "error"
+        self._log_activity(
+            tone=tone,
+            title="Tests executed",
+            detail=f"PR {request.pr_id}: {len(selected_tests)} run, {len(failed_tests)} failed",
+        )
         return execution_summary
 
     async def get_test_results(self, execution_id: str) -> Dict[str, Any]:
@@ -209,6 +273,170 @@ class TraceFoxServiceRegistry:
         if not new_rca:
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Unable to generate RCA")
         return new_rca.model_dump()
+
+    async def get_operations_snapshot(self) -> Dict[str, Any]:
+        reviews = await self.review.all_reviews()
+        total_reviews = len(reviews)
+        total_findings = sum(review.total_findings for review in reviews)
+        critical_total = sum(review.critical_count for review in reviews)
+        major_total = sum(review.major_count for review in reviews)
+        minor_total = sum(review.minor_count for review in reviews)
+        summary_per_pr: Dict[str, Dict[str, Any]] = {}
+        latest_review_info: Optional[Dict[str, Any]] = None
+        if reviews:
+            latest_review = max(reviews, key=lambda item: item.created_at)
+            latest_review_info = {
+                "pr_id": latest_review.pr_id,
+                "summary": latest_review.summary,
+                "total_findings": latest_review.total_findings,
+                "critical_count": latest_review.critical_count,
+                "major_count": latest_review.major_count,
+                "minor_count": latest_review.minor_count,
+                "created_at": latest_review.created_at.isoformat(),
+            }
+            for review in reviews:
+                summary_per_pr[review.pr_id] = {
+                    "review_id": review.review_id,
+                    "summary": review.summary,
+                    "total_findings": review.total_findings,
+                    "critical": review.critical_count,
+                    "major": review.major_count,
+                    "minor": review.minor_count,
+                    "created_at": review.created_at.isoformat(),
+                }
+
+        tests_total = sum(len(tests) for tests in self._tests_by_pr.values())
+        tests_per_pr = {pr_id: len(tests) for pr_id, tests in self._tests_by_pr.items()}
+
+        executions_total = sum(len(executions) for executions in self._executions_by_pr.values())
+        executions_counts_per_pr = {pr_id: len(executions) for pr_id, executions in self._executions_by_pr.items()}
+        executions_latest_per_pr: Dict[str, Dict[str, Any]] = {}
+        rca_counts_per_pr: Dict[str, int] = {}
+        rca_latest_per_pr: Dict[str, Dict[str, Any]] = {}
+
+        for pr_id, execution_ids in self._executions_by_pr.items():
+            if not execution_ids:
+                continue
+            latest_id = execution_ids[-1]
+            latest_payload = await self.test_execution.get_execution(latest_id)
+            if latest_payload:
+                executions_latest_per_pr[pr_id] = {
+                    "execution_id": latest_payload.get("execution_id"),
+                    "status": latest_payload.get("status", "completed"),
+                    "passed": latest_payload.get("passed", 0),
+                    "failed": latest_payload.get("failed", 0),
+                    "flaky": latest_payload.get("flaky", 0),
+                    "skipped": latest_payload.get("skipped", 0),
+                    "total_tests": latest_payload.get("total_tests", 0),
+                    "execution_time_ms": latest_payload.get("execution_time_ms", 0),
+                    "completed_at": latest_payload.get("completed_at"),
+                }
+            rca_count = 0
+            latest_rca_entry: Optional[Dict[str, Any]] = None
+            for exec_id in execution_ids:
+                rca_payload = await self.rca.get_rca(exec_id)
+                if not rca_payload:
+                    continue
+                rca_count += 1
+                candidate = {
+                    "execution_id": rca_payload.test_execution_id,
+                    "category": rca_payload.category.value,
+                    "summary": rca_payload.root_cause_summary,
+                }
+                latest_rca_entry = candidate
+                if exec_id == latest_id:
+                    break
+            if rca_count:
+                rca_counts_per_pr[pr_id] = rca_count
+            if latest_rca_entry:
+                rca_latest_per_pr[pr_id] = latest_rca_entry
+
+        latest_execution_info: Optional[Dict[str, Any]] = None
+        if self._latest_execution_id:
+            latest_execution_payload = await self.test_execution.get_execution(self._latest_execution_id)
+            if latest_execution_payload:
+                latest_execution_info = {
+                    "execution_id": latest_execution_payload.get("execution_id"),
+                    "pr_id": self._execution_index.get(self._latest_execution_id),
+                    "status": latest_execution_payload.get("status", "completed"),
+                    "passed": latest_execution_payload.get("passed", 0),
+                    "failed": latest_execution_payload.get("failed", 0),
+                    "flaky": latest_execution_payload.get("flaky", 0),
+                    "skipped": latest_execution_payload.get("skipped", 0),
+                    "total_tests": latest_execution_payload.get("total_tests", 0),
+                    "execution_time_ms": latest_execution_payload.get("execution_time_ms", 0),
+                    "completed_at": latest_execution_payload.get("completed_at"),
+                }
+
+        rca_items = await self.rca.all_rca()
+        rca_total = len(rca_items)
+        latest_rca = None
+        if self._latest_execution_id:
+            latest_rca_payload = await self.rca.get_rca(self._latest_execution_id)
+            if latest_rca_payload:
+                latest_rca = {
+                    "execution_id": latest_rca_payload.test_execution_id,
+                    "category": latest_rca_payload.category.value,
+                    "summary": latest_rca_payload.root_cause_summary,
+                }
+        quality_summary: Dict[str, Dict[str, int]] = {}
+        for repo_id, tests in self._flaky_stats.items():
+            aggregate = {"pass": 0, "fail": 0, "flaky": 0}
+            for stats in tests.values():
+                aggregate["pass"] += stats.get("pass", 0)
+                aggregate["fail"] += stats.get("fail", 0)
+                aggregate["flaky"] += stats.get("flaky", 0)
+            quality_summary[repo_id] = aggregate
+
+        activity_log = list(self._activity)
+
+        latest_payload = None
+        if self._latest_pr_id:
+            latest_payload = self._pr_registry.get(self._latest_pr_id, {}).get("payload")
+
+        return {
+            "active_pr_id": self._latest_pr_id,
+            "total_prs": len(self._pr_registry),
+            "pr_registry": [
+                {"pr_id": pr_id, **metadata} for pr_id, metadata in self._pr_registry.items()
+            ],
+            "summary": {
+                "total_reviews": total_reviews,
+                "total_findings": total_findings,
+                "critical": critical_total,
+                "major": major_total,
+                "minor": minor_total,
+                "latest": latest_review_info,
+                "per_pr": summary_per_pr,
+            },
+            "tests": {
+                "total_cases": tests_total,
+                "per_pr": tests_per_pr,
+            },
+            "executions": {
+                "total_runs": executions_total,
+                "latest": latest_execution_info,
+                "per_pr_counts": executions_counts_per_pr,
+                "latest_per_pr": executions_latest_per_pr,
+            },
+            "rca": {
+                "total": rca_total,
+                "latest": latest_rca,
+                 "per_pr_counts": rca_counts_per_pr,
+                 "latest_per_pr": rca_latest_per_pr,
+            },
+            "quality": {
+                "repositories": quality_summary,
+            },
+            "activity": activity_log,
+            "checklist": {
+                "webhook": bool(self._pr_registry),
+                "review": total_reviews > 0,
+                "tests": tests_total > 0,
+                "execution": executions_total > 0,
+            },
+            "latest_payload": latest_payload,
+        }
 
     async def submit_feedback(self, feedback: FeedbackPayload) -> Dict[str, Any]:
         await self.learning.record_feedback(feedback)

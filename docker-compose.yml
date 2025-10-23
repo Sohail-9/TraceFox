@@ -10,13 +10,25 @@ services:
     ports:
       - "6379:6379"
 
-  neo4j:
-    image: neo4j:5.22
-    container_name: tracefox-neo4j
+  postgres:
+    image: postgres:15-alpine
+    container_name: tracefox-postgres
     env_file:
       - .env
     environment:
-      NEO4J_AUTH: ${NEO4J_USER}/${NEO4J_PASSWORD}
+      POSTGRES_USER: ${TRACEFOX_POSTGRES__USER}
+      POSTGRES_PASSWORD: ${TRACEFOX_POSTGRES__PASSWORD}
+      POSTGRES_DB: ${TRACEFOX_POSTGRES__DATABASE}
+    ports:
+      - "${TRACEFOX_POSTGRES__PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  neo4j:
+    image: neo4j:5.22
+    container_name: tracefox-neo4j
+    environment:
+      NEO4J_AUTH: "${NEO4J_USER}/${NEO4J_PASSWORD}"
     ports:
       - "7474:7474"
       - "7687:7687"
@@ -27,10 +39,8 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.9.0
     container_name: tracefox-qdrant
-    env_file:
-      - .env
     environment:
-      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
+      QDRANT__SERVICE__API_KEY: "${QDRANT_API_KEY:-}"
     ports:
       - "6333:6333"
       - "6334:6334"
@@ -41,3 +51,4 @@ volumes:
   neo4j_data:
   neo4j_logs:
   qdrant_data:
+  postgres_data:

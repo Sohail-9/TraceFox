@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from datetime import datetime
 from typing import Dict, List, Optional
 from uuid import uuid4
 
@@ -24,11 +25,14 @@ class TestExecutionService:
             execution_id = str(uuid4())
             results = [self._run_single_test(test) for test in tests]
             summary = self._summarise_results(results)
+            completed_at = datetime.utcnow().isoformat() + "Z"
             payload = {
                 "execution_id": execution_id,
                 "pr_id": request.pr_id,
                 "test_case_ids": request.test_case_ids,
                 "results": results,
+                "total_tests": len(results),
+                "completed_at": completed_at,
                 **summary,
             }
             self._executions[execution_id] = payload
@@ -45,6 +49,7 @@ class TestExecutionService:
                 "flaky": summary["flaky"],
                 "skipped": summary["skipped"],
                 "execution_time_ms": summary["execution_time_ms"],
+                "completed_at": completed_at,
             }
 
     async def get_execution(self, execution_id: str) -> Optional[Dict[str, object]]:
@@ -80,4 +85,3 @@ class TestExecutionService:
             total_time += result["execution_time_ms"]  # type: ignore[operator]
         summary["execution_time_ms"] = total_time
         return summary
-
