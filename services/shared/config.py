@@ -45,7 +45,54 @@ class ConfigProvider:
         self._file_env_var = file_env_var
         self._lock = RLock()
         self._cache: Dict[str, Any] = {}
+        self._load_env_file()
         self._file_data = self._load_file_data()
+
+    def _load_env_file(self) -> None:
+        """Populate os.environ from an optional .env file before resolving config."""
+
+        # Allow overriding the env file location via TRACEFOX_ENV_FILE. Empty value disables loading.
+        env_file_hint = os.getenv(f"{self._env_prefix}ENV_FILE", ".env")
+        if not env_file_hint:
+            return
+
+        candidate_paths = []
+        path_hint = Path(env_file_hint)
+        if path_hint.is_absolute():
+            candidate_paths.append(path_hint)
+        else:
+            candidate_paths.append(Path.cwd() / path_hint)
+            # Fallback to repository root relative to this module (../.. from services/shared).
+            candidate_paths.append(Path(__file__).resolve().parents[2] / path_hint)
+
+        env_path = next((p for p in candidate_paths if p.exists()), None)
+        if env_path is None:
+            return
+
+        try:
+            with env_path.open("r", encoding="utf-8") as handle:
+                for raw_line in handle:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if line.startswith("export "):
+                        line = line[len("export ") :].strip()
+                    if "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    key = key.strip()
+                    if not key or key in os.environ:
+                        continue
+                    value = value.strip()
+                    if (
+                        len(value) >= 2
+                        and value[0] == value[-1]
+                        and value[0] in {'"', "'"}
+                    ):
+                        value = value[1:-1]
+                    os.environ[key] = value
+        except OSError as exc:  # pragma: no cover - defensive
+            raise ConfigurationError(f"Unable to read environment file {env_path}") from exc
 
     def _load_file_data(self) -> Mapping[str, Any]:
         file_path_value = os.getenv(self._file_env_var)
@@ -475,6 +522,82 @@ class SecuritySettings:
 
 
 @dataclass(frozen=True)
+class GitHubOAuthSettings:
+    client_id: Optional[str]
+    client_secret: Optional[str]
+    redirect_uri: Optional[str]
+    scope: Tuple[str, ...]
+    allowed_organizations: Tuple[str, ...]
+    allowed_users: Tuple[str, ...]
+    api_base: str
+    login_base: str
+    dev_mode: bool
+    dev_login: Optional[str]
+    dev_user_id: Optional[str]
+    dev_email: Optional[str]
+    dev_name: Optional[str]
+
+    @classmethod
+    def load(cls, provider: ConfigProvider) -> "GitHubOAuthSettings":
+        scope_values = provider.get_sequence("auth.github.scope") or ["read:user", "user:email"]
+        allowed_orgs = tuple(provider.get_sequence("auth.github.allowed_organizations"))
+        allowed_users = tuple(provider.get_sequence("auth.github.allowed_users"))
+        client_id = provider.get_str("auth.github.client_id")
+        dev_mode = provider.get_bool("auth.github.dev_mode", default=False) or False
+        return cls(
+            client_id=client_id,
+            client_secret=provider.get_str("auth.github.client_secret"),
+            redirect_uri=provider.get_str("auth.github.redirect_uri"),
+            scope=tuple(str(scope) for scope in scope_values),
+            allowed_organizations=tuple(str(org) for org in allowed_orgs),
+            allowed_users=tuple(str(user) for user in allowed_users),
+            api_base=provider.get_str("auth.github.api_base") or "https://api.github.com",
+            login_base=provider.get_str("auth.github.login_base")
+            or "https://github.com/login/oauth",
+            dev_mode=dev_mode,
+            dev_login=provider.get_str("auth.github.dev_login"),
+            dev_user_id=provider.get_str("auth.github.dev_user_id"),
+            dev_email=provider.get_str("auth.github.dev_email"),
+            dev_name=provider.get_str("auth.github.dev_name"),
+        )
+
+    def is_configured(self) -> bool:
+        return bool(self.client_id and self.client_secret and self.redirect_uri)
+
+
+@dataclass(frozen=True)
+class AuthSettings:
+    session_secret: str
+    session_ttl_seconds: int
+    state_ttl_seconds: int
+    github: GitHubOAuthSettings
+
+    @classmethod
+    def load(cls, provider: ConfigProvider) -> "AuthSettings":
+        session_secret = provider.get_str("auth.session_secret") or "tracefox-dev-secret"
+        session_ttl = provider.get_int("auth.session_ttl_seconds")
+        if session_ttl is None:
+            session_ttl = 3600
+        state_ttl = provider.get_int("auth.state_ttl_seconds")
+        if state_ttl is None:
+            state_ttl = 300
+
+        github_settings = GitHubOAuthSettings.load(provider)
+        if not github_settings.dev_mode and not github_settings.is_configured():
+            raise ConfigurationError(
+                "GitHub OAuth is not fully configured. Provide client_id, client_secret, and redirect_uri "
+                "or enable dev_mode for local testing."
+            )
+
+        return cls(
+            session_secret=session_secret,
+            session_ttl_seconds=int(session_ttl),
+            state_ttl_seconds=int(state_ttl),
+            github=github_settings,
+        )
+
+
+@dataclass(frozen=True)
 class RateLimitSettings:
     global_rps: int
     burst: int
@@ -588,6 +711,7 @@ class Settings:
     environment: str
     api_gateway_host: str
     api_gateway_port: int
+    api_gateway_allowed_origins: Sequence[str]
     postgres: DatabaseSettings
     redis: RedisSettings
     neo4j: Neo4jSettings
@@ -598,18 +722,29 @@ class Settings:
     circuit_breaker: CircuitBreakerSettings
     cache: CacheSettings
     security: SecuritySettings
+    auth: AuthSettings
     rate_limit: RateLimitSettings
     ai_models: AIModelSettings
     qdrant: QdrantSettings
     quality: QualitySettings
+    github: Any  # lightweight holder for optional GitHub settings
 
     @classmethod
     def load(cls, provider: Optional[ConfigProvider] = None) -> "Settings":
         source = provider or ConfigProvider()
+        # GitHub integration (optional, keep flexible structure)
+        github_settings = {
+            "publish_enabled": source.get_bool("github.publish_enabled", default=False) or False,
+            "api_base": source.get_str("github.api_base") or "https://api.github.com",
+            "token": source.get_str("github.token"),
+            "app_id": source.get_str("github.app_id"),
+            "private_key_pem": source.get_str("github.private_key_pem"),
+        }
         return cls(
             environment=source.require_str("environment"),
             api_gateway_host=source.require_str("api_gateway.host"),
             api_gateway_port=source.require_int("api_gateway.port"),
+            api_gateway_allowed_origins=source.get_sequence("api_gateway.allowed_origins"),
             postgres=DatabaseSettings.load(source),
             redis=RedisSettings.load(source),
             neo4j=Neo4jSettings.load(source),
@@ -620,10 +755,12 @@ class Settings:
             circuit_breaker=CircuitBreakerSettings.load(source),
             cache=CacheSettings.load(source),
             security=SecuritySettings.load(source),
+            auth=AuthSettings.load(source),
             rate_limit=RateLimitSettings.load(source),
             ai_models=AIModelSettings.load(source),
             qdrant=QdrantSettings.load(source),
             quality=QualitySettings.load(source),
+            github=github_settings,
         )
 
 

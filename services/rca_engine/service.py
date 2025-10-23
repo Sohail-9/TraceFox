@@ -67,3 +67,6 @@ class RCAEngine:
     async def get_rca(self, execution_id: str) -> Optional[RCAFinding]:
         return self._rca_results.get(execution_id)
 
+    async def all_rca(self) -> List[RCAFinding]:
+        async with self._lock:
+            return list(self._rca_results.values())

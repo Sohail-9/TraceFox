@@ -31,6 +31,7 @@ after rotating secrets or modifying runtime configuration.
 | `retry`, `circuit_breaker` | Exponential backoff and breaker thresholds |
 | `cache` | Namespace, semantic version, default TTL |
 | `security` | AuthN/Z configuration, mTLS enforcement, audit topic |
+| `auth` | Session management and GitHub OAuth settings |
 | `rate_limit` | Global and per-tenant throttling |
 | `ai_models` | Provider credentials and primary model selections |
 | `qdrant` | Vector store cluster details, replication, backup cadences |
@@ -64,6 +65,30 @@ shared vector manager to publish required backup jobs.
 Setting `observability.traces_endpoint` enables OTLP/GRPC exporting. When
 absent, the system falls back to console spans, useful for local environments.
 `observability.sampling_ratio` controls parent-based sampling.
+
+## Authentication & GitHub OAuth
+
+The API gateway issues first-party session tokens after a GitHub OAuth flow. Set
+these keys to enable sign-in:
+
+- `auth.session_secret` – HMAC secret used to sign TraceFox bearer tokens.
+- `auth.session_ttl_seconds` – Lifetime of issued tokens (defaults to 3600 seconds).
+- `auth.state_ttl_seconds` – Validity window for OAuth `state` parameters.
+- `auth.github.client_id` / `auth.github.client_secret` – GitHub OAuth app credentials.
+- `auth.github.redirect_uri` – Callback URL registered with GitHub (e.g. `https://app.tracefox.ai/auth/github/callback`).
+- `auth.github.redirect_uri` – Callback URL registered with GitHub (e.g. `https://app.tracefox.ai/auth/github/callback`). For local testing use `http://localhost:3000/auth/github/callback`.
+- `auth.github.allowed_organizations` / `allowed_users` (optional) – Restrict access to specific orgs or accounts.
+- `auth.github.dev_mode` – Set to `true` only when you need the stub login for local demos. Leave it `false` to require real GitHub authentication.
+
+Repository onboarding metadata is stored in a SQLite database. Override locations with:
+
+- `TRACEFOX_DATA_PATH` – path to the SQLite file (defaults to `data/tracefox.db`).
+- `TRACEFOX_REPO_STORAGE_PATH` – directory for cloned repositories or simulated snapshots (`data/repos`).
+- `TRACEFOX_ENABLE_ACTUAL_CLONE` – set to `true` to run `git clone` during onboarding; defaults to a simulated clone that records metadata.
+
+Local development can bypass GitHub by enabling `auth.github.dev_mode=true`. When
+dev mode is active, use `/auth/github/dev-login` to mint a session without
+external calls. Populate `auth.github.dev_email` to satisfy email requirements.
 
 ---
 

@@ -55,9 +55,36 @@ Each service is intentionally lightweight: swap the in-memory stores for your pr
    ```
    All configuration lives behind the `TRACEFOX_` prefix. The sample file includes Redis, Neo4j, and Qdrant credentials that match `docker-compose.yml`.
 
+   To enable GitHub sign-in, provide the authentication values:
+
+   - `TRACEFOX_AUTH__SESSION_SECRET`
+   - `TRACEFOX_AUTH__SESSION_TTL_SECONDS`
+   - `TRACEFOX_AUTH__STATE_TTL_SECONDS`
+   - `TRACEFOX_AUTH__GITHUB__CLIENT_ID`
+   - `TRACEFOX_AUTH__GITHUB__CLIENT_SECRET`
+   - `TRACEFOX_AUTH__GITHUB__REDIRECT_URI`
+     - Local testing example: `http://localhost:3000/auth/github/callback`
+   - Optional: set `TRACEFOX_AUTH__GITHUB__DEV_MODE=true` only when you want to exercise the stub login endpoints for local testing. The dashboard will require real GitHub credentials whenever this flag is false.
+
+   Frontend-specific overrides:
+
+   - `NEXT_PUBLIC_TRACEFOX_API_BASE_URL` (defaults to `http://localhost:8000`)
+
+   Optional guardrails:
+
+   - `TRACEFOX_AUTH__GITHUB__ALLOWED_ORGANIZATIONS`
+   - `TRACEFOX_AUTH__GITHUB__ALLOWED_USERS`
+
+   For local development, set `TRACEFOX_AUTH__GITHUB__DEV_MODE=true` and use the
+   `/auth/github/dev-login` endpoint to mint a session without hitting GitHub.
+
+   Repository sync persists metadata and clone status in a lightweight SQLite database at
+   `TRACEFOX_DATA_PATH` (defaults to `data/tracefox.db`). To store cloned repositories elsewhere, set
+   `TRACEFOX_REPO_STORAGE_PATH` (defaults to `data/repos`).
+
 3. **Launch Local Services**
    ```bash
-   docker compose up -d redis neo4j qdrant
+   docker compose up -d postgres redis neo4j qdrant
    uvicorn services.api_gateway.main:app --reload --port 8000
    ```
 
