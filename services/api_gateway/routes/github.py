@@ -39,6 +39,15 @@ class TrackedResourcesResponse(BaseModel):
     clone_jobs: List[GitHubCloneJob]
 
 
+class BootstrapRepositoryRequest(BaseModel):
+    full_name: str
+
+
+class BootstrapRepositoryResponse(BaseModel):
+    status: str
+    task: str
+
+
 def _registry_dependency():
     from services.api_gateway.main import get_registry as _get_registry
 
@@ -107,8 +116,37 @@ async def track_repository(
         private=bool(repo_data.get("private")),
         owner={"login": repo_data.get("owner", {}).get("login", "")},
     )
-    response = await registry.onboard_repository(current_user.user_id, token, summary)
+    response = await registry.onboard_repository(
+        current_user.user_id,
+        token,
+        summary,
+        api_base=api_base,
+    )
     return TrackedRepositoryResponse(repository=response.repository, clone_job=response.clone_job)
+
+
+@router.post(
+    "/repos/bootstrap",
+    response_model=BootstrapRepositoryResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def bootstrap_repository(
+    payload: BootstrapRepositoryRequest,
+    current_user: AuthenticatedUser = Depends(require_user),
+    registry=Depends(_registry_dependency),
+) -> BootstrapRepositoryResponse:
+    token = current_user.github_access_token
+    api_base = await _github_api_base()
+    try:
+        result = await registry.trigger_repository_bootstrap(
+            current_user.user_id,
+            payload.full_name,
+            token,
+            api_base=api_base,
+        )
+    except AuthError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return BootstrapRepositoryResponse(status=result["status"], task=result["task"])
 
 
 @router.get("/tracked", response_model=TrackedResourcesResponse)

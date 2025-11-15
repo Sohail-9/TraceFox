@@ -164,5 +164,8 @@ class GitRepositoryManager:
         request = IndexingRequest(repository_id=repository_id, repo_url=repo_url, branch=repo_data.get("default_branch") or "main")
         await self._indexing.queue_indexing(request)
 
+    async def get_repository(self, user_id: str, full_name: str) -> Optional[Dict[str, Any]]:
+        return await self._store.get_repository(user_id, full_name)
+
 
 __all__ = ["GitRepositoryManager"]

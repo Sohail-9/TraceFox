@@ -1,5 +1,6 @@
 import { fetchJson, postJson } from "./api";
 import type {
+  GitHubBootstrapResponse,
   GitHubRepositoryListResponse,
   GitHubTrackRepositoryResponse,
   GitHubTrackedResources,
@@ -17,4 +18,10 @@ export async function trackGitHubRepository(fullName: string): Promise<GitHubTra
 
 export async function fetchTrackedRepositories(): Promise<GitHubTrackedResources> {
   return fetchJson<GitHubTrackedResources>("/integrations/github/tracked");
+}
+
+export async function bootstrapGitHubRepository(fullName: string): Promise<GitHubBootstrapResponse> {
+  return postJson<GitHubBootstrapResponse>("/integrations/github/repos/bootstrap", {
+    full_name: fullName,
+  });
 }

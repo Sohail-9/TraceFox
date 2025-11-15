@@ -84,4 +84,69 @@ async def get_user(token: str, *, api_base: str) -> Dict[str, Any]:
     return data
 
 
-__all__ = ["list_repositories", "get_repository", "get_user"]
+async def list_pull_requests(
+    token: str,
+    *,
+    api_base: str,
+    full_name: str,
+    state: str = "open",
+    per_page: int = 20,
+    max_pages: int = 2,
+) -> List[Dict[str, Any]]:
+    """Return pull requests for the given repository."""
+
+    url = f"{api_base}/repos/{full_name}/pulls"
+    pull_requests: List[Dict[str, Any]] = []
+    page = 1
+    while page <= max_pages:
+        params = {
+            "state": state,
+            "per_page": per_page,
+            "page": page,
+            "sort": "updated",
+            "direction": "desc",
+        }
+        response = await _request("GET", url, token, params=params)
+        batch = response.json()
+        if not isinstance(batch, list) or not batch:
+            break
+        pull_requests.extend(batch)
+        if len(batch) < per_page:
+            break
+        page += 1
+    return pull_requests
+
+
+async def list_pull_request_files(
+    token: str,
+    *,
+    api_base: str,
+    full_name: str,
+    number: int,
+    per_page: int = 100,
+) -> List[Dict[str, Any]]:
+    """Return files associated with a pull request."""
+
+    url = f"{api_base}/repos/{full_name}/pulls/{number}/files"
+    files: List[Dict[str, Any]] = []
+    page = 1
+    while True:
+        params = {"per_page": per_page, "page": page}
+        response = await _request("GET", url, token, params=params)
+        batch = response.json()
+        if not isinstance(batch, list) or not batch:
+            break
+        files.extend(batch)
+        if len(batch) < per_page:
+            break
+        page += 1
+    return files
+
+
+__all__ = [
+    "list_repositories",
+    "get_repository",
+    "get_user",
+    "list_pull_requests",
+    "list_pull_request_files",
+]
