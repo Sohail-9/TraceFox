@@ -57,12 +57,6 @@ export function rememberOAuthState(state: string): void {
   window.sessionStorage.setItem(STATE_KEY, state);
 }
 
-export function generateOAuthState(): string {
-  const state = crypto.randomUUID();
-  rememberOAuthState(state);
-  return state;
-}
-
 export function consumeOAuthState(): string | null {
   if (!isBrowser()) return null;
   const state = window.sessionStorage.getItem(STATE_KEY);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { Card } from "@/components/Card";
@@ -19,16 +19,48 @@ interface TokenResponse {
   github_token?: string | null;
 }
 
+export const dynamic = 'force-dynamic'; // Prevent static rendering
+
 export default function GitHubCallbackPage(): JSX.Element {
   const router = useRouter();
   const searchParams = useSearchParams();
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-slate-100">
+          <Card
+            title="GitHub Sign-in"
+            accent="brand"
+            className="max-w-md border border-slate-800 bg-slate-900/70 p-8"
+          >
+            <p className="text-sm text-slate-300">
+              Loading GitHub sign-in...
+            </p>
+          </Card>
+        </div>
+      }
+    >
+      <GitHubCallbackContent router={router} searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+interface GitHubCallbackProps {
+  router: ReturnType<typeof useRouter>;
+  searchParams: ReturnType<typeof useSearchParams>;
+}
+
+function GitHubCallbackContent({
+  router,
+  searchParams,
+}: GitHubCallbackProps): JSX.Element {
   const { addToast } = useToast();
   const [status, setStatus] = useState("Validating GitHub authorisation…");
   const [error, setError] = useState<string | null>(null);
+  const code = searchParams.get("code");
+  const state = searchParams.get("state");
 
   useEffect(() => {
-    const code = searchParams.get("code");
-    const state = searchParams.get("state");
     if (!code || !state) {
       setStatus("Unable to continue.");
       setError("Missing GitHub authorisation parameters.");
@@ -57,7 +89,7 @@ export default function GitHubCallbackPage(): JSX.Element {
           title: "GitHub connected",
           description: `Welcome back, ${response.user.login}!`,
         });
-        router.replace("/");
+        router.replace("/dashboard");
       } catch (exchangeError) {
         if (cancelled) return;
         const message =
@@ -74,7 +106,7 @@ export default function GitHubCallbackPage(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [addToast, router, searchParams]);
+  }, [addToast, router, code, state]);
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-950 p-6 text-slate-100">
@@ -100,7 +132,7 @@ export default function GitHubCallbackPage(): JSX.Element {
           ) : null}
           <button
             type="button"
-            onClick={() => router.replace("/")}
+            onClick={() => router.replace("/dashboard")}
             className="w-full rounded-xl border border-brand-400/40 bg-brand-500/20 px-4 py-2 text-sm font-semibold text-brand-100 transition hover:bg-brand-500/30"
           >
             Return to dashboard

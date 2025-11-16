@@ -9,18 +9,26 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, HttpUrl
 
 
-class Severity(str, Enum):
-    critical = "critical"
-    major = "major"
-    minor = "minor"
+class FindingSeverity(str, Enum):
+    high = "high"
+    medium = "medium"
+    low = "low"
+
+
+class FindingPriority(str, Enum):
+    must_fix = "MUST_FIX"
+    should_fix = "SHOULD_FIX"
+    nice_to_fix = "NICE_TO_FIX"
+    suppressed = "SUPPRESSED"
 
 
 class FindingCategory(str, Enum):
     security = "security"
     performance = "performance"
-    bug = "bug"
     style = "style"
-    test_gap = "test_gap"
+    logic = "logic"
+    breaking_change = "breaking_change"
+    cross_layer = "cross_layer"
 
 
 class TestType(str, Enum):
@@ -70,29 +78,53 @@ class WebhookPayload(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
-class ReviewFinding(BaseModel):
+class FindingSource(str, Enum):
+    llama = "llama"
+    deepseek = "deepseek"
+    graph = "graph"
+    orchestration = "orchestration"
+
+
+class Finding(BaseModel):
     id: str
+    type: FindingCategory
+    severity: FindingSeverity
+    confidence: float = Field(ge=0, le=1, default=0.5)
+    message: str
     file_path: str
-    line_number: int
-    severity: Severity
-    category: FindingCategory
-    description: str
+    line_number: int = 0
     suggested_fix: Optional[str] = None
+    impact: Optional[str] = None
+    source_model: FindingSource | str = FindingSource.llama
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    classification: FindingPriority | str | None = None
+    remediation: Optional[str] = None
     code_diff: Optional[str] = None
-    confidence_score: float = Field(ge=0, le=1, default=0.5)
+
+
+class AnalysisStatus(str, Enum):
+    pending = "pending"
+    completed = "completed"
+    failed = "failed"
 
 
 class ReviewSummary(BaseModel):
     review_id: str
     pr_id: str
+    repository: str
+    pr_number: int
     summary: str
-    findings: List[ReviewFinding]
+    findings: List[Finding]
     mermaid_diagram: Optional[str] = None
     total_findings: int = 0
-    critical_count: int = 0
-    major_count: int = 0
-    minor_count: int = 0
+    must_fix_count: int = 0
+    should_fix_count: int = 0
+    nice_to_fix_count: int = 0
+    primary_model: str = "llama"
+    duration_ms: int = 0
+    analysis_status: AnalysisStatus = AnalysisStatus.pending
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class TestCase(BaseModel):
@@ -181,6 +213,39 @@ class DriftDetectionRequest(BaseModel):
     reference_data_url: str
     current_data_url: str
     features: List[str] = Field(default_factory=list)
+
+
+class PRAnalysisRequest(BaseModel):
+    repository: str
+    pr_number: int
+    diff: str
+    files: List[FilePayload] = Field(default_factory=list)
+    changed_files: List[str] = Field(default_factory=list)
+    title: Optional[str] = None
+    author: Optional[str] = None
+    source_branch: Optional[str] = None
+    target_branch: Optional[str] = None
+    repository_url: Optional[HttpUrl] = None
+
+
+class RepositoryIndexRequest(BaseModel):
+    repository_id: str
+    repo_url: HttpUrl
+    branch: str = "main"
+    incremental: bool = False
+
+
+class FileIndexRequest(BaseModel):
+    repository_id: str
+    repo_url: HttpUrl
+    branch: str = "main"
+    files: List[FilePayload] = Field(default_factory=list)
+
+
+class FindingFeedbackRequest(BaseModel):
+    user_id: str
+    reaction: str
+    comment: Optional[str] = None
 
 
 class GitHubRepositoryOwner(BaseModel):

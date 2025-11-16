@@ -1,23 +1,31 @@
-export type Severity = "critical" | "major" | "minor" | string;
+export type FindingSeverity = "high" | "medium" | "low" | string;
+
+export type FindingPriority = "MUST_FIX" | "SHOULD_FIX" | "NICE_TO_FIX" | "SUPPRESSED" | string;
 
 export type FindingCategory =
   | "security"
   | "performance"
-  | "bug"
   | "style"
-  | "test_gap"
+  | "logic"
+  | "breaking_change"
+  | "cross_layer"
   | string;
 
 export type ReviewFinding = {
   id: string;
+  type: FindingCategory;
   file_path: string;
   line_number: number;
-  severity: Severity;
-  category: FindingCategory;
-  description: string;
+  severity: FindingSeverity;
+  confidence: number;
+  message: string;
   suggested_fix?: string | null;
+  impact?: string | null;
+  source_model?: string | null;
+  classification?: FindingPriority | string | null;
+  metadata?: Record<string, unknown>;
   code_diff?: string | null;
-  confidence_score: number;
+  remediation?: string | null;
 };
 
 export type TestType = "unit" | "integration" | "e2e" | "security" | "performance" | string;
@@ -38,14 +46,20 @@ export type TestCase = {
 export type ReviewSummary = {
   review_id: string;
   pr_id: string;
+  repository: string;
+  pr_number: number;
   summary: string;
   findings: ReviewFinding[];
   mermaid_diagram?: string | null;
   total_findings: number;
-  critical_count: number;
-  major_count: number;
-  minor_count: number;
+  must_fix_count: number;
+  should_fix_count: number;
+  nice_to_fix_count: number;
+  primary_model: string;
+  duration_ms: number;
+  analysis_status: string;
   created_at: string;
+  metadata?: Record<string, unknown>;
   tests?: TestCase[];
   rca?: RCAFinding[];
 };
@@ -176,16 +190,16 @@ export type OperationsSnapshot = {
   summary: {
     total_reviews: number;
     total_findings: number;
-    critical: number;
-    major: number;
-    minor: number;
+    must_fix: number;
+    should_fix: number;
+    nice_to_fix: number;
     latest?: {
       pr_id: string;
       summary: string;
       total_findings: number;
-      critical_count: number;
-      major_count: number;
-      minor_count: number;
+      must_fix_count: number;
+      should_fix_count: number;
+      nice_to_fix_count: number;
       created_at: string;
     } | null;
     per_pr?: Record<
@@ -194,9 +208,9 @@ export type OperationsSnapshot = {
         review_id: string;
         summary: string;
         total_findings: number;
-        critical: number;
-        major: number;
-        minor: number;
+        must_fix: number;
+        should_fix: number;
+        nice_to_fix: number;
         created_at: string;
       }
     >;
@@ -273,4 +287,16 @@ export type OperationsSnapshot = {
     execution: boolean;
   };
   latest_payload?: Record<string, unknown> | null;
+};
+
+export type ManualAnalysisPayload = {
+  repository: string;
+  pr_number: number;
+  diff: string;
+  changed_files?: string[];
+  files?: Array<{
+    path: string;
+    content: string;
+    language?: string;
+  }>;
 };

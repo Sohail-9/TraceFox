@@ -13,6 +13,10 @@ from services.shared.observability import observability
 from services.shared.models import (
     DriftDetectionRequest,
     FeedbackPayload,
+    FileIndexRequest,
+    FindingFeedbackRequest,
+    PRAnalysisRequest,
+    RepositoryIndexRequest,
     TestExecutionRequest,
     TestGenerationRequestPayload,
     WebhookPayload,
@@ -64,6 +68,24 @@ async def webhook_preflight(provider: str) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@app.post("/api/v1/index/repository", status_code=status.HTTP_202_ACCEPTED)
+async def index_repository(
+    request: RepositoryIndexRequest,
+    current_user: AuthenticatedUser = Depends(require_user),
+    svc: TraceFoxServiceRegistry = Depends(get_registry),
+) -> dict:
+    return await svc.index_repository(request)
+
+
+@app.post("/api/v1/index/files", status_code=status.HTTP_202_ACCEPTED)
+async def index_files(
+    request: FileIndexRequest,
+    current_user: AuthenticatedUser = Depends(require_user),
+    svc: TraceFoxServiceRegistry = Depends(get_registry),
+) -> dict:
+    return await svc.index_files(request)
+
+
 @app.get("/operations/console")
 async def get_operations_console(
     current_user: AuthenticatedUser = Depends(require_user),
@@ -81,6 +103,15 @@ async def get_pr_review(
     svc: TraceFoxServiceRegistry = Depends(get_registry),
 ) -> dict:
     return await svc.get_pr_review(pr_id, include_tests, include_rca)
+
+
+@app.post("/api/v1/analyze/pr", status_code=status.HTTP_202_ACCEPTED)
+async def analyze_pr(
+    request: PRAnalysisRequest,
+    current_user: AuthenticatedUser = Depends(require_user),
+    svc: TraceFoxServiceRegistry = Depends(get_registry),
+) -> dict:
+    return await svc.analyze_pull_request(request)
 
 
 @app.post("/tests/generate", status_code=status.HTTP_202_ACCEPTED)
@@ -127,6 +158,23 @@ async def submit_feedback(
     current_user: AuthenticatedUser = Depends(require_user),
     svc: TraceFoxServiceRegistry = Depends(get_registry),
 ) -> dict:
+    return await svc.submit_feedback(payload)
+
+
+@app.post("/api/v1/feedback/{finding_id}", status_code=status.HTTP_201_CREATED)
+async def submit_feedback_for_finding(
+    finding_id: str,
+    request: FindingFeedbackRequest,
+    current_user: AuthenticatedUser = Depends(require_user),
+    svc: TraceFoxServiceRegistry = Depends(get_registry),
+) -> dict:
+    payload = FeedbackPayload(
+        user_id=request.user_id,
+        target_type="finding",
+        target_id=finding_id,
+        reaction=request.reaction,
+        comment=request.comment,
+    )
     return await svc.submit_feedback(payload)
 
 

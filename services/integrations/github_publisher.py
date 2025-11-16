@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 import httpx
 
 from services.shared.config import ConfigurationError, get_settings
-from services.shared.models import ReviewFinding
+from services.shared.models import Finding
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ class GitHubPublisher:
         repo_url: str,
         pr_number: int,
         head_sha: Optional[str],
-        findings: List[ReviewFinding],
+        findings: List[Finding],
         summary_text: str,
     ) -> None:
         if not self._enabled:
@@ -96,7 +96,7 @@ class GitHubPublisher:
             raise ValueError("missing owner/repo")
         return owner, repo
 
-    def _build_inline_comments(self, findings: List[ReviewFinding]) -> List[Dict[str, Any]]:
+    def _build_inline_comments(self, findings: List[Finding]) -> List[Dict[str, Any]]:
         comments: List[Dict[str, Any]] = []
         for f in findings[:50]:  # cap to a sensible batch
             # We do not have diff positions yet; use a safe fallback: position=1
@@ -104,9 +104,11 @@ class GitHubPublisher:
             comments.append({"path": f.file_path, "position": max(1, int(f.line_number) if f.line_number else 1), "body": body})
         return comments
 
-    def _format_comment_body(self, f: ReviewFinding) -> str:
-        header = f"[{f.severity.upper()}] {f.category}:"
-        lines = [header, f.description]
+    def _format_comment_body(self, f: Finding) -> str:
+        severity = f.severity.value.upper() if hasattr(f.severity, "value") else str(f.severity).upper()
+        type_label = f.type.value if hasattr(f.type, "value") else str(f.type)
+        header = f"[{severity}] {type_label}:"
+        lines = [header, f.message]
         if f.suggested_fix:
             lines.append("")
             lines.append("Suggested change:")
@@ -120,7 +122,8 @@ class GitHubPublisher:
             lines.append(f.code_diff)
             lines.append("```")
         lines.append("")
-        lines.append(f"Confidence: {f.confidence_score:.2f}")
+        confidence = float(f.confidence or 0.0)
+        lines.append(f"Confidence: {confidence:.2f}")
         return "\n".join(lines)
 
     def _headers(self) -> Mapping[str, str]:
@@ -165,4 +168,3 @@ class GitHubPublisher:
 publisher = GitHubPublisher()
 
 __all__ = ["GitHubPublisher", "publisher"]
-

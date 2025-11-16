@@ -4,7 +4,7 @@ import clsx from "clsx";
 import { ReactNode } from "react";
 
 type CardProps = {
-  title: string;
+  title?: string;
   accent?: "brand" | "emerald" | "amber" | "rose" | "slate";
   icon?: ReactNode;
   action?: ReactNode;
@@ -38,19 +38,23 @@ export function Card({
         className
       )}
     >
-      <header className="mb-5 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          {icon ? (
-            <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-lg text-white/90 shadow-inner shadow-white/10">
-              {icon}
-            </div>
-          ) : null}
-          <h2 className="text-base font-semibold uppercase tracking-wide text-slate-100">
-            {title}
-          </h2>
-        </div>
-        {action ? <div className="text-xs text-slate-300">{action}</div> : null}
-      </header>
+      {(title || action) && (
+        <header className="mb-5 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            {icon ? (
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-lg text-white/90 shadow-inner shadow-white/10">
+                {icon}
+              </div>
+            ) : null}
+            {title ? (
+              <h2 className="text-base font-semibold uppercase tracking-wide text-slate-100">
+                {title}
+              </h2>
+            ) : null}
+          </div>
+          {action ? <div className="text-xs text-slate-300">{action}</div> : null}
+        </header>
+      )}
       <div className="space-y-4 text-sm leading-relaxed text-slate-100/90">{children}</div>
       {footer ? <footer className="mt-6 text-xs text-slate-400">{footer}</footer> : null}
     </section>

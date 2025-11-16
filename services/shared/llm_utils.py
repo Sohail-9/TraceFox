@@ -71,6 +71,9 @@ MODEL_REGISTRY: Dict[str, ProviderMetadata] = {
         completion_path="/chat/completions",
         supports_structured_content=True,
         supports_stream=True,
+        supports_functions=False,
+        max_context_tokens=128_000,
+        max_completion_tokens=4_096
     ),
     "gemma-3-27b-it": ProviderMetadata(
         provider_key="ola_krutrim",
@@ -79,6 +82,9 @@ MODEL_REGISTRY: Dict[str, ProviderMetadata] = {
         completion_path="/chat/completions",
         supports_structured_content=False,
         supports_stream=False,
+        supports_functions=False,
+        max_context_tokens=128_000,
+        max_completion_tokens=4_096
     ),
 }
 

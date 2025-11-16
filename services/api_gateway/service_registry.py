@@ -19,16 +19,21 @@ from services.learning_feedback.service import LearningFeedbackService
 from services.ml.service import DriftDetectionService
 from services.integrations import github_client
 from services.rca_engine.service import RCAEngine
-from services.review_engine.service import AIReviewEngine
+from services.review_engine.service import PRAnalysisEngine
 from services.shared.auth import AuthError
 from services.shared.event_bus import event_bus
 from services.shared.resilience import execute_with_resilience
 from services.shared.models import (
     DriftDetectionRequest,
     FeedbackPayload,
+    FileIndexRequest,
+    FilePayload,
+    FindingFeedbackRequest,
     GitHubRepositorySummary,
     GitHubRepositoryTrackResponse,
     GitHubTrackedRepository,
+    PRAnalysisRequest,
+    RepositoryIndexRequest,
     TestCase,
     TestExecutionRequest,
     TestGenerationRequestPayload,
@@ -36,7 +41,7 @@ from services.shared.models import (
 )
 from services.test_execution.service import TestExecutionService
 from services.test_generation.service import TestGenerationService
-from services.shared.models import FilePayload, PullRequestInfo, RepositoryInfo
+from services.shared.models import PullRequestInfo, RepositoryInfo
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +51,7 @@ class TraceFoxServiceRegistry:
 
     def __init__(self) -> None:
         self.indexing = CodebaseIndexingService()
-        self.review = AIReviewEngine()
+        self.review = PRAnalysisEngine()
         self.test_generation = TestGenerationService()
         self.test_execution = TestExecutionService()
         self.rca = RCAEngine()
@@ -79,7 +84,7 @@ class TraceFoxServiceRegistry:
             }
         )
 
-    async def process_webhook(self, provider: str, payload: WebhookPayload) -> Dict[str, Any]:
+    def _register_pr(self, provider: str, payload: WebhookPayload) -> str:
         pr_id = self._pr_identifier(payload)
         payload_snapshot = payload.model_dump()
         self._pr_registry[pr_id] = {
@@ -96,6 +101,10 @@ class TraceFoxServiceRegistry:
             "payload": payload_snapshot,
         }
         self._latest_pr_id = pr_id
+        return pr_id
+
+    async def process_webhook(self, provider: str, payload: WebhookPayload) -> Dict[str, Any]:
+        pr_id = self._register_pr(provider, payload)
 
         indexing_job = await self.indexing.queue_indexing(
             IndexingRequest(
@@ -181,6 +190,103 @@ class TraceFoxServiceRegistry:
             "job_id": job_id,
             "test_cases": [test_case.model_dump() for test_case in tests_cast],
             "total_generated": result.get("total_generated", len(tests_cast)),
+        }
+
+    async def index_repository(self, request: RepositoryIndexRequest) -> Dict[str, Any]:
+        job = await self.indexing.queue_indexing(
+            IndexingRequest(
+                repository_id=request.repository_id,
+                repo_url=str(request.repo_url),
+                branch=request.branch,
+                incremental=request.incremental,
+            )
+        )
+        self._log_activity(
+            tone="info",
+            title="Repository indexing scheduled",
+            detail=f"{request.repository_id}: branch={request.branch}",
+        )
+        return {
+            "job_id": job.job_id,
+            "status": job.status,
+            "repository_id": job.repository_id,
+        }
+
+    async def index_files(self, request: FileIndexRequest) -> Dict[str, Any]:
+        changed_files = [file.path for file in request.files]
+        job = await self.indexing.queue_indexing(
+            IndexingRequest(
+                repository_id=request.repository_id,
+                repo_url=str(request.repo_url),
+                branch=request.branch,
+                incremental=True,
+                changed_files=changed_files,
+            )
+        )
+        self._log_activity(
+            tone="info",
+            title="Selective file indexing scheduled",
+            detail=f"{request.repository_id}: {len(changed_files)} file(s)",
+        )
+        return {
+            "job_id": job.job_id,
+            "status": job.status,
+            "repository_id": job.repository_id,
+            "indexed_files": changed_files,
+        }
+
+    async def analyze_pull_request(self, request: PRAnalysisRequest) -> Dict[str, Any]:
+        repo_url = str(request.repository_url or self._derive_repo_url(request.repository))
+        files = self._resolve_request_files(request)
+        repository = RepositoryInfo(
+            id=request.repository,
+            name=request.repository,
+            url=repo_url,
+            default_branch=request.target_branch or request.source_branch or "main",
+        )
+        pull_request = PullRequestInfo(
+            number=request.pr_number,
+            title=request.title or f"Manual analysis #{request.pr_number}",
+            author=request.author or "unknown",
+            source_branch=request.source_branch or "feature/manual",
+            target_branch=request.target_branch or "main",
+            diff_url=f"{repo_url}/pull/{request.pr_number}.diff",
+        )
+        payload = WebhookPayload(
+            event_type="manual_analysis",
+            action="analyze",
+            repository=repository,
+            pull_request=pull_request,
+            files=files,
+        )
+        pr_id = self._register_pr("api", payload)
+        await self.indexing.queue_indexing(
+            IndexingRequest(
+                repository_id=repository.id,
+                repo_url=str(repository.url),
+                branch=pull_request.target_branch,
+                incremental=True,
+                changed_files=[file.path for file in files],
+            )
+        )
+        review_summary = await self.review.run_review(pr_id, payload)
+        await event_bus.publish(
+            "api:analysis",
+            {"pr_id": pr_id, "review_id": review_summary.review_id, "total_findings": review_summary.total_findings},
+        )
+        self._log_activity(
+            tone="success",
+            title="Manual analysis completed",
+            detail=f"{pr_id}: {review_summary.total_findings} findings",
+        )
+        return {
+            "pr_id": pr_id,
+            "analysis_status": review_summary.analysis_status.value,
+            "primary_model": review_summary.primary_model,
+            "duration_ms": review_summary.duration_ms,
+            "summary": review_summary.summary,
+            "total_findings": review_summary.total_findings,
+            "findings": [finding.model_dump() for finding in review_summary.findings],
         }
 
     async def list_tracked_repositories(self, user_id: str) -> Dict[str, Any]:
@@ -522,9 +628,9 @@ class TraceFoxServiceRegistry:
         reviews = await self.review.all_reviews()
         total_reviews = len(reviews)
         total_findings = sum(review.total_findings for review in reviews)
-        critical_total = sum(review.critical_count for review in reviews)
-        major_total = sum(review.major_count for review in reviews)
-        minor_total = sum(review.minor_count for review in reviews)
+        must_fix_total = sum(review.must_fix_count for review in reviews)
+        should_fix_total = sum(review.should_fix_count for review in reviews)
+        nice_to_fix_total = sum(review.nice_to_fix_count for review in reviews)
         summary_per_pr: Dict[str, Dict[str, Any]] = {}
         latest_review_info: Optional[Dict[str, Any]] = None
         if reviews:
@@ -533,9 +639,9 @@ class TraceFoxServiceRegistry:
                 "pr_id": latest_review.pr_id,
                 "summary": latest_review.summary,
                 "total_findings": latest_review.total_findings,
-                "critical_count": latest_review.critical_count,
-                "major_count": latest_review.major_count,
-                "minor_count": latest_review.minor_count,
+                "must_fix_count": latest_review.must_fix_count,
+                "should_fix_count": latest_review.should_fix_count,
+                "nice_to_fix_count": latest_review.nice_to_fix_count,
                 "created_at": latest_review.created_at.isoformat(),
             }
             for review in reviews:
@@ -543,9 +649,9 @@ class TraceFoxServiceRegistry:
                     "review_id": review.review_id,
                     "summary": review.summary,
                     "total_findings": review.total_findings,
-                    "critical": review.critical_count,
-                    "major": review.major_count,
-                    "minor": review.minor_count,
+                    "must_fix": review.must_fix_count,
+                    "should_fix": review.should_fix_count,
+                    "nice_to_fix": review.nice_to_fix_count,
                     "created_at": review.created_at.isoformat(),
                 }
 
@@ -647,9 +753,9 @@ class TraceFoxServiceRegistry:
             "summary": {
                 "total_reviews": total_reviews,
                 "total_findings": total_findings,
-                "critical": critical_total,
-                "major": major_total,
-                "minor": minor_total,
+                "must_fix": must_fix_total,
+                "should_fix": should_fix_total,
+                "nice_to_fix": nice_to_fix_total,
                 "latest": latest_review_info,
                 "per_pr": summary_per_pr,
             },
@@ -732,6 +838,23 @@ class TraceFoxServiceRegistry:
         result = await self.drift.detect(request)
         await event_bus.publish("ml:drift", {"pr_id": request.pr_id, "drift": result})
         return result
+
+    def _resolve_request_files(self, request: PRAnalysisRequest) -> List[FilePayload]:
+        if request.files:
+            return request.files
+        if request.changed_files:
+            return [
+                FilePayload(path=path, content=request.diff, language=_detect_language(path))
+                for path in request.changed_files
+            ]
+        return [FilePayload(path="diff.patch", content=request.diff, language="patch")]
+
+    @staticmethod
+    def _derive_repo_url(repository: str) -> str:
+        repository = repository.strip()
+        if repository.startswith("http://") or repository.startswith("https://"):
+            return repository
+        return f"https://github.com/{repository}"
 
     def _pr_identifier(self, payload: WebhookPayload) -> str:
         return f"{payload.repository.id}:{payload.pull_request.number}"

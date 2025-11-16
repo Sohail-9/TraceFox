@@ -9,6 +9,13 @@ services:
       - .env
     ports:
       - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 
   postgres:
     image: postgres:15-alpine
@@ -36,19 +43,18 @@ services:
       - neo4j_data:/data
       - neo4j_logs:/logs
 
-  qdrant:
-    image: qdrant/qdrant:v1.9.0
-    container_name: tracefox-qdrant
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: tracefox-rabbitmq
     environment:
-      QDRANT__SERVICE__API_KEY: "${QDRANT_API_KEY:-}"
+      RABBITMQ_DEFAULT_USER: ${TRACEFOX_MESSAGING__USER:-tracefox}
+      RABBITMQ_DEFAULT_PASS: ${TRACEFOX_MESSAGING__PASSWORD:-tracefox}
     ports:
-      - "6333:6333"
-      - "6334:6334"
-    volumes:
-      - qdrant_data:/qdrant/storage
+      - "5672:5672"
+      - "15672:15672"
 
 volumes:
   neo4j_data:
   neo4j_logs:
-  qdrant_data:
   postgres_data:

@@ -8,10 +8,10 @@ from uuid import uuid4
 
 from services.shared.llm_utils import call_chat_completion
 from services.shared.models import (
+    Finding,
     FindingCategory,
-    ReviewFinding,
+    FindingSeverity,
     ReviewSummary,
-    Severity,
     TestCase,
     TestGenerationRequestPayload,
     TestType,
@@ -50,17 +50,17 @@ class TestGenerationService:
 
     def _select_findings(
         self, request: TestGenerationRequestPayload, review: ReviewSummary | None
-    ) -> List[ReviewFinding]:
+    ) -> List[Finding]:
         if not review or not review.findings:
-            placeholder = ReviewFinding(
+            placeholder = Finding(
                 id=str(uuid4()),
+                type=FindingCategory.logic,
+                severity=FindingSeverity.low,
+                confidence=0.2,
+                message="TraceFox fallback finding: detailed review unavailable.",
                 file_path="unknown.py",
                 line_number=1,
-                severity=Severity.minor,
-                category=FindingCategory.test_gap,
-                description="TraceFox fallback finding: detailed review unavailable.",
                 suggested_fix="Re-run review engine once analysis is ready.",
-                confidence_score=0.2,
             )
             return [placeholder]
         if not request.finding_ids:
@@ -70,7 +70,7 @@ class TestGenerationService:
     async def _invoke_generation_model(
         self,
         request: TestGenerationRequestPayload,
-        findings: List[ReviewFinding],
+        findings: List[Finding],
     ) -> List[TestCase]:
         if not findings:
             return []
@@ -92,7 +92,7 @@ class TestGenerationService:
             return []
 
     def _build_generation_messages(
-        self, request: TestGenerationRequestPayload, findings: List[ReviewFinding]
+        self, request: TestGenerationRequestPayload, findings: List[Finding]
     ) -> List[Dict[str, Any]]:
         findings_section = []
         for idx, finding in enumerate(findings, start=1):
@@ -103,8 +103,8 @@ class TestGenerationService:
                         "file_path": finding.file_path,
                         "line_number": finding.line_number,
                         "severity": finding.severity.value,
-                        "category": finding.category.value,
-                        "description": finding.description,
+                        "type": finding.type.value,
+                        "message": finding.message,
                         "suggested_fix": finding.suggested_fix,
                     },
                     ensure_ascii=False,
@@ -138,7 +138,7 @@ class TestGenerationService:
         self,
         request: TestGenerationRequestPayload,
         response: Dict[str, Any],
-        findings: List[ReviewFinding],
+        findings: List[Finding],
     ) -> List[TestCase]:
         choices = response.get("choices") or []
         if not choices:
@@ -178,7 +178,7 @@ class TestGenerationService:
     def _fallback_tests(
         self,
         request: TestGenerationRequestPayload,
-        findings: List[ReviewFinding],
+        findings: List[Finding],
     ) -> List[TestCase]:
         generated: List[TestCase] = []
         for finding in findings:
@@ -199,7 +199,7 @@ class TestGenerationService:
                 )
         return generated
 
-    def _fallback_code(self, finding: ReviewFinding, test_type: TestType) -> str:
+    def _fallback_code(self, finding: Finding, test_type: TestType) -> str:
         header = f"def test_{finding.id[:8]}_{test_type.value.replace('-', '_')}():"
         docstring = f'    """TraceFox fallback test for {finding.file_path}."""'
         body = "    # TODO: replace with generated assertions once Gemma is available\n    assert True"

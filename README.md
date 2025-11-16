@@ -20,12 +20,14 @@ TraceFox was built to be production-ready from day one: configuration via enviro
 services/
   api_gateway/        # FastAPI entrypoint, fan-out to domain services
   code_indexing/      # Repo ingest + graph/embedding prep (simulated)
-  review_engine/      # AI-powered PR analysis
+  review_engine/      # Multi-pass PR analysis engine (Llama 3 + DeepSeek)
   test_generation/    # Deterministic test synthesis
   test_execution/     # Parallel execution harness
   rca_engine/         # Root-cause intelligence + recommendations
   learning_feedback/  # Feedback capture + scoring
   compliance/         # Standards coverage reporting
+  scoring/            # Confidence scoring + risk classification
+  query/              # Cross-store query orchestration (graph + metadata)
   ml/                 # Drift detection heuristics
   shared/             # Config, event bus, connection pools, utilities
 frontend/             # Next.js mission-control dashboard
@@ -33,6 +35,33 @@ infrastructure/       # Terraform + compose scaffolding
 ```
 
 Each service is intentionally lightweight: swap the in-memory stores for your preferred persistence, plug in real model endpoints, and you’re production-ready without rewiring the architecture.
+
+---
+
+## Model Strategy & Precision Layering
+
+TraceFox V3 ships with the LLD described in the design doc:
+
+- **Fast Filter** – Llama 3 8B (local Ollama/vLLM) quickly determines if a PR needs deeper inspection in <2 seconds.
+- **Primary Analysis** – Llama 2/3 70B handles security + style heuristics, using the new `services/shared/llm_clients.py` wrapper to talk to local or hosted inference endpoints.
+- **Deep Reasoning** – DeepSeek-Coder 67B via Loa Krutrim models cross-file dependencies, breaking changes, and perf regressions with structured JSON output.
+- **Graph + Metadata Context** – `services/query` synthesizes Neo4j + Postgres lookups for callers, dependencies, and similarity matches referenced during reviews.
+- **Confidence Ensemble** – `services/scoring` applies pattern deviation, context overlap, historical accuracy, and cross-validation weights before labeling findings as `MUST_FIX`, `SHOULD_FIX`, or `NICE_TO_FIX`.
+
+The `PRAnalysisEngine` orchestrates these passes in parallel, caches context, and pushes structured findings downstream to GitHub, the UI, test generation, and RCA services with latency budgets that match the doc (<60s p95).
+
+---
+
+## API Highlights
+
+To mirror the LLD contracts, the API Gateway exposes:
+
+- `POST /api/v1/index/repository` – schedule full/incremental indexing jobs against a repository URL and branch.
+- `POST /api/v1/index/files` – queue targeted re-indexing for a set of files (converted to incremental graph + vector refresh).
+- `POST /api/v1/analyze/pr` – run the multi-pass PR analysis pipeline directly via API using diff + file payloads.
+- `POST /api/v1/feedback/{finding_id}` – capture developer reactions tied to individual findings (driving feedback learning loops).
+
+These sit alongside the existing webhook-driven flow so automation or CLI tooling can interact with TraceFox without faking webhooks.
 
 ---
 
@@ -84,9 +113,10 @@ Each service is intentionally lightweight: swap the in-memory stores for your pr
 
 3. **Launch Local Services**
    ```bash
-   docker compose up -d postgres redis neo4j qdrant
+   docker compose up -d postgres redis neo4j rabbitmq
    uvicorn services.api_gateway.main:app --reload --port 8000
    ```
+   > The design doc calls for a vector database (Pinecone/Weaviate). For local testing you can optionally run an OSS stand‑in (for example Qdrant) and point the TraceFox vector settings at it, but it is not required for the default flows.
 
 4. **Spin Up the Dashboard**
    ```bash

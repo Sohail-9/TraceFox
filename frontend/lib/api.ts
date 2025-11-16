@@ -1,6 +1,24 @@
-import { getAccessToken, generateOAuthState } from "./session";
+import { getAccessToken, rememberOAuthState } from "./session";
 
 const DEFAULT_BASE_URL = "http://localhost:8000";
+
+interface GitHubLoginChallenge {
+  authorization_url: string;
+  state: string;
+}
+
+function buildApiUrl(path: string): string {
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return path;
+  }
+  const normalisedPath = path.startsWith("/") ? path : `/${path}`;
+  const base = getApiBaseUrl();
+  if (!base) {
+    return normalisedPath;
+  }
+  const trimmedBase = base.endsWith("/") ? base.slice(0, -1) : base;
+  return `${trimmedBase}${normalisedPath}`;
+}
 
 export function getApiBaseUrl(): string {
   if (process.env.NEXT_PUBLIC_API_BASE_URL) {
@@ -13,8 +31,7 @@ export function getApiBaseUrl(): string {
 }
 
 export async function fetchJson<T>(path: string, options?: RequestInit): Promise<T> {
-  const base = getApiBaseUrl();
-  const url = `${base}${path}`;
+  const url = buildApiUrl(path);
   const headers = new Headers({
     "Content-Type": "application/json",
   });
@@ -67,7 +84,7 @@ export async function postJson<T>(path: string, body: unknown, options?: Request
 }
 
 export const initiateGitHubLogin = async () => {
-  const state = generateOAuthState();
-  const loginUrl = `/api/auth/github?state=${encodeURIComponent(state)}`;
-  window.location.href = loginUrl;
+  const challenge = await fetchJson<GitHubLoginChallenge>("/auth/github/login");
+  rememberOAuthState(challenge.state);
+  window.location.href = challenge.authorization_url;
 };
