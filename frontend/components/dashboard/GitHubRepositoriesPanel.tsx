@@ -220,7 +220,7 @@ export function GitHubRepositoriesPanel(): JSX.Element {
         <h2 className="text-xl font-semibold text-white">Connected Sources</h2>
         <p className="text-sm text-slate-400">
           Track repositories to bootstrap pull requests and hydrate the dashboard
-          with DeepSeek + Llama findings.
+          with actionable findings.
         </p>
       </div>
       <div className="space-y-5">

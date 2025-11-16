@@ -418,6 +418,7 @@ class MessagingSettings:
     consumer_groups: Sequence[str]
     queue_max_size: int
     delivery_timeout_seconds: float
+    management_url: Optional[str]
 
     @classmethod
     def load(cls, provider: ConfigProvider) -> "MessagingSettings":
@@ -428,6 +429,7 @@ class MessagingSettings:
             delivery_timeout_seconds=provider.require_float(
                 "messaging.delivery_timeout_seconds"
             ),
+            management_url=provider.get_str("messaging.management_url"),
         )
 
 

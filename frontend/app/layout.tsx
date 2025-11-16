@@ -10,9 +10,8 @@ const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono" });
 
 export const metadata: Metadata = {
   title: "TraceFox - AI-Powered Code Review",
-  description:
-    "Next.js frontend for the TraceFox DeepSeek + Llama analysis platform.",
-  keywords: ["TraceFox", "code review", "DeepSeek", "Llama", "GitHub"],
+  description: "Next.js frontend for the TraceFox control center.",
+  keywords: ["TraceFox", "code review", "GitHub", "AI", "Observability"],
 };
 
 export default function RootLayout({

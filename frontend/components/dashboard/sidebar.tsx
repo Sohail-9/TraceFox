@@ -17,7 +17,7 @@ export function Sidebar(): JSX.Element {
       <div className="mb-8">
         <p className="text-xs uppercase tracking-[0.45em] text-slate-500">TraceFox</p>
         <p className="text-lg font-semibold text-white">Mission Control</p>
-        <p className="text-xs text-slate-500">DeepSeek + Llama pipeline</p>
+        <p className="text-xs text-slate-500">TraceFox pipeline</p>
       </div>
       <nav className="flex-1 space-y-2">
         {MENU_ITEMS.map((item) => {
@@ -39,7 +39,7 @@ export function Sidebar(): JSX.Element {
         })}
       </nav>
       <div className="mt-8 space-y-3 text-xs text-slate-500">
-        <p>DeepSeek via Loa Krutrim · Llama 3 pipelines · Graph insights</p>
+        <p>AI-powered reviews · Orchestration · Graph insights</p>
         <Link
           href="/login"
           className="inline-flex w-full items-center justify-center rounded-2xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:border-rose-400 hover:text-rose-200"

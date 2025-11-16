@@ -30,9 +30,13 @@ function mapRegistry(prRegistry: OperationsSnapshot["pr_registry"]): DashboardPR
 export function PRList({
   registry,
   loading,
+  selectedPrId,
+  onSelect,
 }: {
   registry: OperationsSnapshot["pr_registry"];
   loading: boolean;
+  selectedPrId?: string | null;
+  onSelect?: (prId: string) => void;
 }): JSX.Element {
   if (loading) {
     return (
@@ -50,7 +54,12 @@ export function PRList({
   return (
     <div className="grid gap-3 md:grid-cols-2">
       {items.map((pr) => (
-        <PRCard key={pr.prId} pr={pr} />
+        <PRCard
+          key={pr.prId}
+          pr={pr}
+          selected={selectedPrId === pr.prId}
+          onSelect={onSelect}
+        />
       ))}
     </div>
   );

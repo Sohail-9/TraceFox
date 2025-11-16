@@ -13,7 +13,7 @@ export default function HomePage(): JSX.Element {
           Mission Control for AI Code Reviews
         </h1>
         <p className="text-lg text-slate-400">
-          Visualize DeepSeek + Llama analysis, manage findings, and track PR
+          Visualize AI-assisted analysis, manage findings, and track PR
           health across every repository. Built with Next.js App Router,
           Tailwind, and precision-first UX.
         </p>

@@ -18,7 +18,7 @@ export function TopNav(): JSX.Element {
           TraceFox
         </p>
         <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-slate-400">
-          DeepSeek · Llama · Neo4j · RabbitMQ
+          TraceFox Control Center
         </p>
       </div>
       <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide">

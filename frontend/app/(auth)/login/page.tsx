@@ -39,7 +39,7 @@ export default function LoginPage(): JSX.Element {
             </p>
             <h1 className="text-3xl font-semibold">AI-Powered Code Review</h1>
             <p className="text-sm text-slate-400">
-              Connect your Git provider to unlock DeepSeek + Llama insights for
+              Connect your Git provider to unlock AI insights for
               every pull request.
             </p>
           </div>

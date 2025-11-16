@@ -10,9 +10,25 @@ type DashboardPR = {
   updatedAt?: string;
 };
 
-export function PRCard({ pr }: { pr: DashboardPR }): JSX.Element {
+export function PRCard({
+  pr,
+  selected,
+  onSelect,
+}: {
+  pr: DashboardPR;
+  selected?: boolean;
+  onSelect?: (id: string) => void;
+}): JSX.Element {
   return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4 shadow-inner shadow-black/30">
+    <button
+      type="button"
+      onClick={() => onSelect?.(pr.prId)}
+      className={`w-full rounded-2xl border p-4 text-left shadow-inner shadow-black/30 transition ${
+        selected
+          ? "border-brand-400 bg-brand-500/20"
+          : "border-slate-800 bg-slate-950/70 hover:border-brand-500/30 hover:bg-slate-950"
+      }`}
+    >
       <div className="flex items-center justify-between text-xs uppercase tracking-wide text-slate-500">
         <span>{pr.repository ?? "Repository"}</span>
         <span>{pr.status ?? pr.action ?? "pending"}</span>
@@ -26,6 +42,6 @@ export function PRCard({ pr }: { pr: DashboardPR }): JSX.Element {
       <p className="text-[10px] text-slate-600">
         Updated {pr.updatedAt ?? "—"}
       </p>
-    </div>
+    </button>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useToast } from "@/components/ToastProvider";
 import { apiClient } from "@/lib/api-client";
@@ -8,17 +8,33 @@ import type { ManualAnalysisPayload } from "@/types/backend";
 
 export function DashboardHeader({
   onAnalyzed,
+  suggestedRepository,
+  suggestedPrNumber,
 }: {
   onAnalyzed: (prId: string) => void;
+  suggestedRepository?: string | null;
+  suggestedPrNumber?: number | null;
 }): JSX.Element {
   const { addToast } = useToast();
   const [form, setForm] = useState<ManualAnalysisPayload>({
-    repository: "tracefox/control-center",
-    pr_number: 42,
-    diff: "diff --git a/src/app.py b/src/app.py",
-    changed_files: ["src/app.py"],
+    repository: "",
+    pr_number: NaN,
+    diff: "",
+    changed_files: [],
   });
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!form.repository && suggestedRepository) {
+      setForm((prev) => ({ ...prev, repository: suggestedRepository }));
+    }
+  }, [form.repository, suggestedRepository]);
+
+  useEffect(() => {
+    if ((Number.isNaN(form.pr_number) || !form.pr_number) && suggestedPrNumber) {
+      setForm((prev) => ({ ...prev, pr_number: suggestedPrNumber }));
+    }
+  }, [form.pr_number, suggestedPrNumber]);
 
   const handleSubmit = async () => {
     setLoading(true);
@@ -51,8 +67,7 @@ export function DashboardHeader({
           </p>
           <h1 className="text-3xl font-semibold text-white">Control Center</h1>
           <p className="text-sm text-slate-400">
-            Monitor GitHub/GitLab pull requests, visualize DeepSeek &amp; Llama
-            reasoning, and push fixes faster.
+            Monitor GitHub/GitLab pull requests, visualize AI reasoning, and push fixes faster.
           </p>
         </div>
         <form
@@ -68,6 +83,7 @@ export function DashboardHeader({
             </label>
             <input
               className="rounded-2xl border border-slate-700 bg-slate-900 px-3 py-2"
+              placeholder="owner/repo"
               value={form.repository}
               onChange={(event) =>
                 setForm((prev) => ({ ...prev, repository: event.target.value }))
@@ -81,7 +97,8 @@ export function DashboardHeader({
             <input
               type="number"
               className="w-24 rounded-2xl border border-slate-700 bg-slate-900 px-3 py-2"
-              value={form.pr_number}
+              placeholder="#"
+              value={Number.isNaN(form.pr_number) ? "" : form.pr_number}
               onChange={(event) =>
                 setForm((prev) => ({
                   ...prev,
@@ -96,6 +113,7 @@ export function DashboardHeader({
             </label>
             <input
               className="rounded-2xl border border-slate-700 bg-slate-900 px-3 py-2"
+              placeholder="src/app.ts, src/utils/logger.ts"
               value={form.changed_files?.join(", ") ?? ""}
               onChange={(event) =>
                 setForm((prev) => ({
@@ -114,6 +132,7 @@ export function DashboardHeader({
             </label>
             <textarea
               className="h-20 rounded-2xl border border-slate-700 bg-slate-900 px-3 py-2"
+              placeholder="Paste diff snippet or file content…"
               value={form.diff}
               onChange={(event) =>
                 setForm((prev) => ({ ...prev, diff: event.target.value }))

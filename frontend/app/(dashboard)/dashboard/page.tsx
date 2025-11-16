@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Card } from "@/components/Card";
 import { DashboardHeader } from "@/components/dashboard/header";
+import { AnalyticsPanel } from "@/components/dashboard/AnalyticsPanel";
 import { LoadingSpinner } from "@/components/common/loading-spinner";
 import { PRAnalysisPanel } from "@/components/pr/pr-analysis-panel";
 import { PRList } from "@/components/pr/pr-list";
@@ -15,12 +16,21 @@ import {
 import { GitHubRepositoriesPanel } from "@/components/dashboard/GitHubRepositoriesPanel";
 
 export default function DashboardPage(): JSX.Element {
+  const [selectedPrId, setSelectedPrId] = useState<string | null>(null);
   const {
     data: operations,
     isLoading: operationsLoading,
     mutate: mutateOperations,
   } = useOperations();
-  const activePrId = operations?.active_pr_id ?? null;
+  const activePrId = selectedPrId ?? operations?.active_pr_id ?? null;
+
+  useEffect(() => {
+    if (!selectedPrId) return;
+    const exists = operations?.pr_registry?.some((entry) => entry.pr_id === selectedPrId);
+    if (!exists) {
+      setSelectedPrId(null);
+    }
+  }, [operations?.pr_registry, selectedPrId]);
   const {
     data: review,
     isLoading: reviewLoading,
@@ -48,6 +58,8 @@ export default function DashboardPage(): JSX.Element {
   return (
     <div className="space-y-6">
       <DashboardHeader
+        suggestedRepository={operations?.pr_registry?.[0]?.repository_name}
+        suggestedPrNumber={operations?.pr_registry?.[0]?.pull_request_number}
         onAnalyzed={(_prId) => {
           mutateOperations();
         }}
@@ -79,6 +91,8 @@ export default function DashboardPage(): JSX.Element {
           <PRList
             registry={operations?.pr_registry ?? []}
             loading={operationsLoading}
+            selectedPrId={selectedPrId ?? operations?.active_pr_id ?? null}
+            onSelect={(prId) => setSelectedPrId(prId)}
           />
         </Card>
         <Card className="border border-slate-800 bg-slate-950/60 p-5">
@@ -102,6 +116,9 @@ export default function DashboardPage(): JSX.Element {
           />
         </Card>
       </div>
+      {operations?.summary ? (
+        <AnalyticsPanel summary={operations.summary} totalPrs={operations.total_prs} />
+      ) : null}
       <GitHubRepositoriesPanel />
     </div>
   );
