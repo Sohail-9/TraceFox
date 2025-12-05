@@ -109,28 +109,77 @@ class SessionManager:
 
 
 class OAuthStateStore:
-    """In-memory state tracker for OAuth flows with TTL enforcement."""
+    """State tracker for OAuth flows with TTL enforcement and signature checks."""
 
-    def __init__(self, ttl_seconds: int) -> None:
+    def __init__(self, secret: str, ttl_seconds: int) -> None:
+        self._secret = secret.encode("utf-8")
         self._ttl_seconds = ttl_seconds
         self._values: Dict[str, float] = {}
         self._lock = Lock()
 
     def create(self) -> str:
-        state = secrets.token_urlsafe(32)
+        nonce = secrets.token_urlsafe(32)
         expires_at = time.time() + self._ttl_seconds
         with self._lock:
-            self._values[state] = expires_at
-        return state
+            self._values[nonce] = expires_at
+        payload = {
+            "nonce": nonce,
+            "exp": int(expires_at),
+        }
+        return self._encode(payload)
 
     def consume(self, state: str) -> bool:
+        try:
+            payload = self._decode(state)
+        except AuthError:
+            return False
+        nonce = payload.get("nonce")
+        exp = payload.get("exp")
+        if not isinstance(nonce, str) or not isinstance(exp, int):
+            return False
+        now = time.time()
+        if exp < now:
+            with self._lock:
+                self._values.pop(nonce, None)
+            return False
         with self._lock:
-            expires_at = self._values.pop(state, None)
+            expires_at = self._values.pop(nonce, None)
         if expires_at is None:
-            return False
-        if expires_at < time.time():
-            return False
-        return True
+            return exp >= now
+        return expires_at >= now
+
+    def _encode(self, payload: Dict[str, object]) -> str:
+        body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        encoded_body = base64.urlsafe_b64encode(body).decode("utf-8").rstrip("=")
+        signature = hmac.new(self._secret, encoded_body.encode("utf-8"), hashlib.sha256).digest()
+        encoded_signature = base64.urlsafe_b64encode(signature).decode("utf-8").rstrip("=")
+        return f"{encoded_body}.{encoded_signature}"
+
+    def _decode(self, state: str) -> Dict[str, object]:
+        parts = state.split(".")
+        if len(parts) != 2:
+            raise AuthError("Invalid OAuth state format")
+        body_part, signature_part = parts
+        try:
+            expected_signature = hmac.new(
+                self._secret, body_part.encode("utf-8"), hashlib.sha256
+            ).digest()
+            provided_signature = base64.urlsafe_b64decode(self._pad(signature_part))
+        except (ValueError, TypeError) as exc:
+            raise AuthError("Invalid OAuth state encoding") from exc
+        if not hmac.compare_digest(expected_signature, provided_signature):
+            raise AuthError("Invalid OAuth state signature")
+        try:
+            payload_raw = base64.urlsafe_b64decode(self._pad(body_part))
+            payload = json.loads(payload_raw.decode("utf-8"))
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise AuthError("Invalid OAuth state payload") from exc
+        return payload
+
+    @staticmethod
+    def _pad(value: str) -> bytes:
+        padding = "=" * (-len(value) % 4)
+        return f"{value}{padding}".encode("utf-8")
 
 
 @dataclass
@@ -294,7 +343,9 @@ class AuthService:
         self._session_manager = SessionManager(
             self._settings.session_secret, self._settings.session_ttl_seconds
         )
-        self._state_store = OAuthStateStore(self._settings.state_ttl_seconds)
+        self._state_store = OAuthStateStore(
+            self._settings.session_secret, self._settings.state_ttl_seconds
+        )
         self._github_client = GitHubOAuthClient(self._settings)
 
     def create_login_challenge(self) -> Tuple[str, str]:

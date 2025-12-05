@@ -8,7 +8,12 @@ import { Card } from "@/components/Card";
 import { Skeleton } from "@/components/Skeleton";
 import { useToast } from "@/components/ToastProvider";
 import { fetchJson, getApiBaseUrl, postJson, swrFetcher } from "@/lib/api";
-import { fetchGitHubRepositories, fetchTrackedRepositories, trackGitHubRepository } from "@/lib/github";
+import {
+  bootstrapGitHubRepository,
+  fetchGitHubRepositories,
+  fetchTrackedRepositories,
+  trackGitHubRepository,
+} from "@/lib/github";
 import {
   SessionState,
   SessionUser,
@@ -176,6 +181,7 @@ export default function DashboardPage(): JSX.Element {
   const [githubRepos, setGithubRepos] = useState<GitHubRepositorySummary[]>([]);
   const [githubReposLoading, setGithubReposLoading] = useState(false);
   const [trackedRepos, setTrackedRepos] = useState<GitHubTrackedRepository[]>([]);
+  const [bootstrapTarget, setBootstrapTarget] = useState<string | null>(null);
   const [cloneJobs, setCloneJobs] = useState<GitHubCloneJob[]>([]);
   const [trackedLoading, setTrackedLoading] = useState(false);
   const [githubSearch, setGithubSearch] = useState("");
@@ -462,6 +468,33 @@ export default function DashboardPage(): JSX.Element {
       }
     },
     [addToast, refreshTrackedRepositories]
+  );
+
+  const handleBootstrapRepository = useCallback(
+    async (fullName: string) => {
+      setBootstrapTarget(fullName);
+      try {
+        await bootstrapGitHubRepository(fullName);
+        addToast({
+          tone: "success",
+          title: "Analysis started",
+          description: `${fullName} queued for TraceFox analysis.`,
+        });
+        await refreshTrackedRepositories();
+        await mutateOperations();
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unable to start TraceFox analysis.";
+        addToast({
+          tone: "error",
+          title: "Analysis failed",
+          description: message,
+        });
+      } finally {
+        setBootstrapTarget(null);
+      }
+    },
+    [addToast, mutateOperations, refreshTrackedRepositories]
   );
 
   const trackedByFullName = useMemo(() => {
@@ -1420,6 +1453,28 @@ const activePrDisplay = useMemo(() => {
                         >
                           {repo.sync_status}
                         </span>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="text-[11px] text-slate-400/80">
+                          Default branch: <span className="text-slate-200">{repo.default_branch}</span>
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => void handleBootstrapRepository(repo.full_name)}
+                          disabled={
+                            bootstrapTarget === repo.full_name || trackedLoading || repo.sync_status === "queued"
+                          }
+                          className={clsx(
+                            "inline-flex items-center gap-1 rounded-lg border px-3 py-1 text-xs font-semibold transition",
+                            bootstrapTarget === repo.full_name
+                              ? "border-brand-400/60 bg-brand-500/20 text-brand-50"
+                              : "border-brand-400/60 bg-brand-500/10 text-brand-100 hover:bg-brand-500/20",
+                            (bootstrapTarget === repo.full_name || trackedLoading || repo.sync_status === "queued") &&
+                              "cursor-not-allowed opacity-60"
+                          )}
+                        >
+                          {bootstrapTarget === repo.full_name ? "Starting…" : "Run Analysis"}
+                        </button>
                       </div>
                     </div>
                   </li>

@@ -1,9 +1,15 @@
-import { getAccessToken } from "./session";
+import { getAccessToken, generateOAuthState } from "./session";
 
 const DEFAULT_BASE_URL = "http://localhost:8000";
 
 export function getApiBaseUrl(): string {
-  return process.env.NEXT_PUBLIC_API_BASE_URL ?? DEFAULT_BASE_URL;
+  if (process.env.NEXT_PUBLIC_API_BASE_URL) {
+    return process.env.NEXT_PUBLIC_API_BASE_URL;
+  }
+  if (typeof window !== "undefined") {
+    return "";
+  }
+  return DEFAULT_BASE_URL;
 }
 
 export async function fetchJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -12,6 +18,8 @@ export async function fetchJson<T>(path: string, options?: RequestInit): Promise
   const headers = new Headers({
     "Content-Type": "application/json",
   });
+  // Include credentials to send cookies with each request
+  const init = { ...options, credentials: 'include' as RequestCredentials };
   if (options?.headers) {
     new Headers(options.headers).forEach((value, key) => {
       headers.set(key, value);
@@ -22,7 +30,7 @@ export async function fetchJson<T>(path: string, options?: RequestInit): Promise
     headers.set("Authorization", `Bearer ${token}`);
   }
   const res = await fetch(url, {
-    ...options,
+    ...init,
     headers,
     next: { revalidate: 5 },
   });
@@ -57,3 +65,9 @@ export async function postJson<T>(path: string, body: unknown, options?: Request
     body: JSON.stringify(body),
   });
 }
+
+export const initiateGitHubLogin = async () => {
+  const state = generateOAuthState();
+  const loginUrl = `/api/auth/github?state=${encodeURIComponent(state)}`;
+  window.location.href = loginUrl;
+};

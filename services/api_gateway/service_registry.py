@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections import defaultdict, deque
 from datetime import datetime
-from typing import Any, DefaultDict, Deque, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Awaitable, DefaultDict, Deque, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import HTTPException, status
@@ -14,8 +17,10 @@ from services.code_indexing.git_repository_manager import GitRepositoryManager
 from services.compliance.service import ComplianceService
 from services.learning_feedback.service import LearningFeedbackService
 from services.ml.service import DriftDetectionService
+from services.integrations import github_client
 from services.rca_engine.service import RCAEngine
 from services.review_engine.service import AIReviewEngine
+from services.shared.auth import AuthError
 from services.shared.event_bus import event_bus
 from services.shared.resilience import execute_with_resilience
 from services.shared.models import (
@@ -31,6 +36,9 @@ from services.shared.models import (
 )
 from services.test_execution.service import TestExecutionService
 from services.test_generation.service import TestGenerationService
+from services.shared.models import FilePayload, PullRequestInfo, RepositoryInfo
+
+logger = logging.getLogger(__name__)
 
 
 class TraceFoxServiceRegistry:
@@ -58,6 +66,7 @@ class TraceFoxServiceRegistry:
         self._latest_pr_id: Optional[str] = None
         self._latest_execution_id: Optional[str] = None
         self.repositories = GitRepositoryManager(indexing_service=self.indexing)
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
     def _log_activity(self, *, tone: str, title: str, detail: str) -> None:
         self._activity.appendleft(
@@ -182,11 +191,46 @@ class TraceFoxServiceRegistry:
         user_id: str,
         github_token: str,
         repo_payload: GitHubRepositorySummary,
+        *,
+        api_base: str,
     ) -> GitHubRepositoryTrackResponse:
         record = await self.repositories.register_repository(user_id, repo_payload.model_dump())
-        clone_job = await self.repositories.schedule_clone(user_id=user_id, repo_data=repo_payload.model_dump(), github_token=github_token)
+        clone_job = await self.repositories.schedule_clone(
+            user_id=user_id, repo_data=repo_payload.model_dump(), github_token=github_token
+        )
         repo_model = GitHubTrackedRepository.model_validate(record)
+        self._schedule_task(
+            self._bootstrap_repository(user_id, github_token, repo_model, api_base),
+            name=f"repo-bootstrap-{repo_model.repo_id}",
+        )
         return GitHubRepositoryTrackResponse(repository=repo_model, clone_job=clone_job)
+
+    async def trigger_repository_bootstrap(
+        self,
+        user_id: str,
+        full_name: str,
+        github_token: str | None,
+        *,
+        api_base: str,
+    ) -> Dict[str, str]:
+        record = await self.repositories.get_repository(user_id, full_name)
+        if not record:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                f"Repository {full_name} is not tracked for user {user_id}",
+            )
+        repo_model = GitHubTrackedRepository.model_validate(record)
+        task_name = f"repo-bootstrap-{repo_model.repo_id}-{uuid4().hex[:6]}"
+        self._schedule_task(
+            self._bootstrap_repository(user_id, github_token, repo_model, api_base),
+            name=task_name,
+        )
+        self._log_activity(
+            tone="info",
+            title="Bootstrap requested",
+            detail=f"{repo_model.full_name}: manual analysis triggered for user {user_id}.",
+        )
+        return {"task": task_name, "status": "scheduled"}
 
     async def execute_tests(self, request: TestExecutionRequest) -> Dict[str, Any]:
         available_tests = self._tests_by_pr.get(request.pr_id, [])
@@ -252,6 +296,206 @@ class TraceFoxServiceRegistry:
             detail=f"PR {request.pr_id}: {len(selected_tests)} run, {len(failed_tests)} failed",
         )
         return execution_summary
+
+    def _schedule_task(self, coro: Awaitable[Any], *, name: str) -> None:
+        task = asyncio.create_task(coro, name=name)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _bootstrap_repository(
+        self,
+        user_id: str,
+        github_token: str | None,
+        repository: GitHubTrackedRepository,
+        api_base: str,
+    ) -> None:
+        if not github_token:
+            await self._queue_placeholder_analysis(
+                user_id,
+                repository,
+                reason="GitHub token unavailable",
+            )
+            return
+        try:
+            pull_requests = await github_client.list_pull_requests(
+                github_token,
+                api_base=api_base,
+                full_name=repository.full_name,
+                state="open",
+            )
+        except AuthError as exc:
+            logger.warning("Bootstrap skipped for %s: %s", repository.full_name, exc)
+            await self._queue_placeholder_analysis(user_id, repository, reason=str(exc))
+            return
+
+        if not pull_requests:
+            await self._queue_placeholder_analysis(user_id, repository, reason="no open pull requests detected")
+            return
+
+        processed = 0
+        for pr in pull_requests[:5]:
+            number = pr.get("number")
+            if number is None:
+                continue
+            try:
+                payload = await self._build_webhook_payload(
+                    user_id,
+                    repository,
+                    pr,
+                    github_token,
+                    api_base,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to prepare bootstrap payload for %s#%s: %s",
+                    repository.full_name,
+                    number,
+                    exc,
+                )
+                continue
+            try:
+                await self.process_webhook("github", payload)
+                processed += 1
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.exception(
+                    "Bootstrap processing failed for %s#%s: %s",
+                    repository.full_name,
+                    number,
+                    exc,
+                )
+
+        if processed == 0:
+            await self._queue_placeholder_analysis(
+                user_id,
+                repository,
+                reason="open pull requests found but none could be processed",
+            )
+            return
+
+        tone = "success" if processed else "warning"
+        detail = (
+            f"{repository.full_name}: queued {processed} open PR(s) for user {user_id}."
+            if processed
+            else f"{repository.full_name}: open PRs found for user {user_id} but none could be processed."
+        )
+        self._log_activity(
+            tone=tone,
+            title="Bootstrap complete" if processed else "Bootstrap incomplete",
+            detail=detail,
+        )
+
+    async def _build_webhook_payload(
+        self,
+        user_id: str,
+        repository: GitHubTrackedRepository,
+        pull_request: Dict[str, Any],
+        github_token: str,
+        api_base: str,
+    ) -> WebhookPayload:
+        repo_html_url = pull_request.get("base", {}).get("repo", {}).get("html_url") or repository.html_url
+        resolved_url = repo_html_url or repository.html_url
+        repo_info = RepositoryInfo(
+            id=str(repository.repo_id),
+            name=repository.full_name,
+            url=str(resolved_url),
+            default_branch=repository.default_branch,
+        )
+
+        head = pull_request.get("head") or {}
+        base = pull_request.get("base") or {}
+        author_login = (pull_request.get("user") or {}).get("login") or _owner_from_full_name(repository.full_name)
+        pr_info = PullRequestInfo(
+            number=int(pull_request["number"]),
+            title=str(pull_request.get("title") or "TraceFox bootstrap analysis"),
+            author=str(author_login),
+            source_branch=str(head.get("ref") or repository.default_branch),
+            target_branch=str(base.get("ref") or repository.default_branch),
+            diff_url=str(pull_request.get("diff_url") or f"{pull_request.get('html_url')}.diff"),
+        )
+
+        try:
+            files_raw = await github_client.list_pull_request_files(
+                github_token,
+                api_base=api_base,
+                full_name=repository.full_name,
+                number=pr_info.number,
+            )
+        except AuthError as exc:
+            logger.warning(
+                "Unable to fetch PR files for %s#%s: %s",
+                repository.full_name,
+                pr_info.number,
+                exc,
+            )
+            files_raw = []
+
+        file_payloads: List[FilePayload] = []
+        for item in files_raw[:10]:
+            filename = item.get("filename") or "unknown.txt"
+            patch = item.get("patch") or ""
+            language = _detect_language(filename)
+            file_payloads.append(
+                FilePayload(
+                    path=filename,
+                    content=str(patch),
+                    language=language,
+                )
+            )
+
+        return WebhookPayload(
+            event_type="pull_request",
+            action="opened",
+            repository=repo_info,
+            pull_request=pr_info,
+            files=file_payloads,
+        )
+
+    async def _queue_placeholder_analysis(
+        self,
+        user_id: str,
+        repository: GitHubTrackedRepository,
+        *,
+        reason: str,
+    ) -> None:
+        repo_url = repository.html_url or repository.clone_url or f"https://github.com/{repository.full_name}"
+        compare_url = f"{repo_url}/compare/{repository.default_branch}...{repository.default_branch}"
+        repo_info = RepositoryInfo(
+            id=str(repository.repo_id),
+            name=repository.full_name,
+            url=str(repo_url),
+            default_branch=repository.default_branch,
+        )
+        pr_info = PullRequestInfo(
+            number=0,
+            title="TraceFox bootstrap analysis",
+            author=_owner_from_full_name(repository.full_name),
+            source_branch=repository.default_branch,
+            target_branch=repository.default_branch,
+            diff_url=str(compare_url),
+        )
+        placeholder_file = FilePayload(
+            path="TRACEFOX_BOOTSTRAP.md",
+            content=(
+                "+++ TRACEFOX_BOOTSTRAP.md\n"
+                "@@ TraceFox bootstrap @@\n"
+                "- Repository onboarding detected no active pull requests.\n"
+                f"+ Placeholder analysis generated because {reason}.\n"
+            ),
+            language="md",
+        )
+        payload = WebhookPayload(
+            event_type="pull_request",
+            action="opened",
+            repository=repo_info,
+            pull_request=pr_info,
+            files=[placeholder_file],
+        )
+        self._log_activity(
+            tone="info",
+            title="Bootstrap placeholder queued",
+            detail=f"{repository.full_name}: generated synthetic PR 0 for user {user_id} ({reason}).",
+        )
+        await self.process_webhook("github", payload)
 
     async def get_test_results(self, execution_id: str) -> Dict[str, Any]:
         execution = await self.test_execution.get_execution(execution_id)
@@ -497,6 +741,20 @@ class TraceFoxServiceRegistry:
         if not metadata:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown PR context")
         return metadata["repository_id"]
+
+
+def _detect_language(path: str) -> str:
+    suffix = Path(path).suffix.lower().lstrip(".")
+    if not suffix:
+        return "text"
+    return suffix
+
+
+def _owner_from_full_name(full_name: str) -> str:
+    if "/" in full_name:
+        owner, *_ = full_name.split("/", 1)
+        return owner or full_name
+    return full_name
 
 
 registry = TraceFoxServiceRegistry()

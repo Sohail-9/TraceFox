@@ -136,6 +136,11 @@ export interface GitHubTrackRepositoryResponse {
   clone_job: Record<string, unknown>;
 }
 
+export interface GitHubBootstrapResponse {
+  status: string;
+  task: string;
+}
+
 export interface GitHubTrackedResources {
   repositories: GitHubTrackedRepository[];
   clone_jobs: GitHubCloneJob[];

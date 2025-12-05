@@ -65,7 +65,7 @@ class ProviderMetadata:
 
 MODEL_REGISTRY: Dict[str, ProviderMetadata] = {
     "deepseek-r1": ProviderMetadata(
-        provider_key="deepseek_ai",
+        provider_key="ola_krutrim",
         model_name="DeepSeek-R1",
         default_endpoint="https://cloud.olakrutrim.com/v1",
         completion_path="/chat/completions",
