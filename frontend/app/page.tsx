@@ -14,8 +14,7 @@ export default function HomePage(): JSX.Element {
         </h1>
         <p className="text-lg text-slate-400">
           Visualize AI-assisted analysis, manage findings, and track PR
-          health across every repository. Built with Next.js App Router,
-          Tailwind, and precision-first UX.
+          health across every repository.
         </p>
         <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
           <Link
