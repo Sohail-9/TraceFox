@@ -11,7 +11,12 @@ type FindingsListProps = {
 
 export function FindingsList({ findings, onFeedback }: FindingsListProps): JSX.Element {
   if (!findings.length) {
-    return <p className="text-sm text-slate-500">No findings available for this PR.</p>;
+    return (
+      <div className="space-y-3">
+        <p className="text-sm text-muted">No findings available for this PR.</p>
+        <p className="text-sm text-muted">Run an analysis to generate findings for this pull request.</p>
+      </div>
+    );
   }
   return (
     <div className="space-y-3" data-testid="findings-list">

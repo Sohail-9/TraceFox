@@ -20,6 +20,14 @@ const config: Config = {
           800: "#233697",
           900: "#222f76"
         }
+      ,
+      ui: {
+        panel: 'var(--panel)',
+        muted: 'var(--muted)',
+        text: 'var(--text)',
+        glass: 'var(--glass)',
+        'brand-500': 'var(--brand-500)'
+      }
       }
     },
   },

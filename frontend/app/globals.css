@@ -14,6 +14,41 @@ body {
   background-color: #030712;
 }
 
+/* Theme tokens (dark default). Toggle by adding/removing the `light-theme` class on <html> */
+:root {
+  --bg: #030712;
+  --panel: #0b1220;
+  --muted: #94a3b8;
+  --text: #e6eef8;
+  --brand-500: #7c3aed;
+  --glass: rgba(255,255,255,0.03);
+}
+
+.light-theme {
+  color-scheme: light;
+  --bg: #f8fafc;
+  --panel: #ffffff;
+  --muted: #64748b;
+  --text: #0f172a;
+  --brand-500: #6d28d9;
+  --glass: rgba(2,6,23,0.04);
+}
+
+/* smooth theme transitions */
+.theme-transition * {
+  transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+/* Lightweight CSS utilities backed by tokens (used alongside Tailwind) */
+.bg-panel { background-color: var(--panel) !important; }
+.bg-glass { background-color: var(--glass) !important; }
+.text-muted { color: var(--muted) !important; }
+.text-ui { color: var(--text) !important; }
+.brand { color: var(--brand-500) !important; }
+.brand-bg { background-color: rgba(124,58,237,0.18) !important; }
+.border-ui { border-color: rgba(255,255,255,0.06) !important; }
+.shadow-soft { box-shadow: 0 6px 18px rgba(2,6,23,0.6); }
+
 ::-webkit-scrollbar {
   width: 10px;
 }

@@ -35,7 +35,7 @@ export function useReview(prId: string | null) {
 export async function submitFindingFeedback(
   findingId: string,
   reaction: string,
-  revalidate?: KeyedMutator<ReviewSummary>
+  revalidate?: KeyedMutator<ReviewSummary | null>
 ) {
   await apiClient.submitFeedback(findingId, {
     feedback_type: reaction,

@@ -36,13 +36,18 @@ app = FastAPI(
 allowed_origins = list(settings.api_gateway_allowed_origins or [])
 if not allowed_origins:
     allowed_origins = ["*"]
+    # Disallow credentials with wildcard origin
+    allow_creds = False
+else:
+    allow_creds = True
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=True,
+    allow_credentials=allow_creds,  # Dynamic credential allowance
+    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining"]
 )
 
 observability.instrument_fastapi(app)
@@ -54,12 +59,20 @@ def get_registry() -> TraceFoxServiceRegistry:
     return registry
 
 
+from services.shared.security import validate_webhook_signature
+
 @app.post("/webhooks/{provider}", status_code=status.HTTP_202_ACCEPTED)
 async def handle_webhook(
     provider: str,
     payload: WebhookPayload,
+    signature: str = Header(None, alias="X-Hub-Signature-256"),
     svc: TraceFoxServiceRegistry = Depends(get_registry),
 ) -> dict:
+    if not validate_webhook_signature(provider, payload, signature):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid webhook signature"
+        )
     return await svc.process_webhook(provider, payload)
 
 
@@ -191,7 +204,10 @@ async def list_flaky_tests(
         try:
             effective_threshold = get_settings().quality.flaky_threshold
         except ConfigurationError as exc:
-            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc)) from exc
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="Flaky test threshold configuration missing"
+            ) from exc
     return await svc.list_flaky_tests(repository_id, effective_threshold, is_quarantined)
 
 

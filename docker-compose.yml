@@ -17,9 +17,9 @@ services:
       retries: 5
 
 
-  postgres:
+  database:
     image: postgres:15-alpine
-    container_name: tracefox-postgres
+    container_name: tracefox-database
     env_file:
       - .env
     environment:

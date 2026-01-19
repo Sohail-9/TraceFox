@@ -16,26 +16,26 @@ const severityColor: Record<string, string> = {
 
 export function NotificationList({ notifications }: NotificationProps) {
   if (!notifications || !Object.keys(notifications).length) {
-    return <p className="text-sm text-slate-400">No notifications have been generated yet.</p>;
+    return <p className="text-sm text-muted">No notifications have been generated yet.</p>;
   }
 
   return (
     <div className="space-y-3">
       {Object.entries(notifications).map(([key, message]) => {
         const severityClass = severityColor[message.severity?.toLowerCase?.() ?? ""] ??
-          "border-slate-600 bg-slate-900/60 text-slate-200";
+          "border-ui bg-glass text-ui";
         return (
           <div
             key={key}
-            className={`rounded-xl border px-4 py-3 text-sm shadow shadow-slate-950/40 ${severityClass}`}
+            className={`rounded-xl border px-4 py-3 text-sm shadow ${severityClass} bg-glass`}
           >
             <div className="flex items-center justify-between gap-4">
-              <span className="text-xs uppercase tracking-wide text-slate-300">{message.channel}</span>
-              <span className="text-[10px] uppercase tracking-wider text-slate-400">
+              <span className="text-xs uppercase tracking-wide text-muted">{message.channel}</span>
+              <span className="text-[10px] uppercase tracking-wider text-muted">
                 {message.severity ?? "info"}
               </span>
             </div>
-            <pre className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-slate-100">
+            <pre className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-ui">
               {message.body}
             </pre>
           </div>

@@ -13,6 +13,7 @@ type FindingItemProps = {
 
 export function FindingItem({ finding, onFeedback }: FindingItemProps): JSX.Element {
   const [selectedReaction, setSelectedReaction] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   const handleClick = (reaction: string) => {
     setSelectedReaction(reaction);
@@ -30,6 +31,10 @@ export function FindingItem({ finding, onFeedback }: FindingItemProps): JSX.Elem
           <p className="text-xs text-slate-500">
             {finding.file_path}:{finding.line_number} · {finding.type}
           </p>
+          <p className="mt-1 text-[11px] text-slate-400">
+            {finding.source_model ? `source: ${finding.source_model}` : null}
+            {finding.classification ? ` · ${finding.classification}` : null}
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <SeverityIndicator severity={finding.severity} />
@@ -41,7 +46,7 @@ export function FindingItem({ finding, onFeedback }: FindingItemProps): JSX.Elem
           Suggestion: {finding.suggested_fix}
         </p>
       ) : null}
-      <div className="mt-4 flex flex-wrap gap-2 text-xs">
+      <div className="mt-4 flex items-center justify-between gap-2 text-xs">
           {["implemented", "dismissed", "modified"].map((reaction) => (
             <button
               key={reaction}
@@ -56,7 +61,23 @@ export function FindingItem({ finding, onFeedback }: FindingItemProps): JSX.Elem
               {reaction}
             </button>
           ))}
+        <div className="flex items-center gap-2">
+          {finding.code_diff ? (
+            <button
+              type="button"
+              onClick={() => setExpanded((s) => !s)}
+              className="rounded-md px-3 py-1 text-xs text-slate-300 hover:bg-slate-800/40"
+            >
+              {expanded ? "Hide details" : "Show details"}
+            </button>
+          ) : null}
+        </div>
       </div>
+      {expanded && finding.code_diff ? (
+        <pre className="mt-3 max-h-60 overflow-auto rounded-md border border-slate-800 bg-black/80 p-3 text-xs text-slate-100">
+          {finding.code_diff}
+        </pre>
+      ) : null}
     </div>
   );
 }

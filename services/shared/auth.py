@@ -292,10 +292,13 @@ class GitHubOAuthClient:
             raise AuthError(f"GitHub user lookup failed: {exc.response.text}") from exc
         except httpx.RequestError as exc:
             raise AuthError(f"Unable to reach GitHub API: {exc}") from exc
-
-            if not email:
-                login = user_data.get("login") or "tracefox"
-                email = f"{login}@users.noreply.github.com"
+        # If no email was discoverable from the primary user payload or the
+        # /user/emails endpoint, fallback to the GitHub noreply address.
+        # This must be executed outside the exception handler so it runs on
+        # the successful path when emails are simply absent.
+        if not email:
+            login = user_data.get("login") or "tracefox"
+            email = f"{login}@users.noreply.github.com"
         return GitHubIdentity(
             user_id=str(user_data.get("id")),
             login=user_data.get("login"),

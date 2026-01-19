@@ -101,23 +101,22 @@ export function GitHubRepositoriesPanel(): JSX.Element {
 
   const renderTrackedList = () => {
     if (trackedLoading) {
-      return (
-        <div className="flex items-center justify-center py-4">
-          <LoadingSpinner />
-        </div>
-      );
-    }
+        return (
+          <div className="flex items-center justify-center py-4">
+            <LoadingSpinner />
+          </div>
+        );
+      }
     if (trackedError) {
       return (
         <p className="text-sm text-rose-300">
-          Unable to load tracked repositories:{" "}
-          {trackedError instanceof Error ? trackedError.message : "Unknown error"}
+          Unable to load tracked repositories: {trackedError instanceof Error ? trackedError.message : "Unknown error"}
         </p>
       );
     }
     if (!trackedRepos.length) {
       return (
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-muted">
           No repositories have been tracked for analysis yet. Pick one below to
           bootstrap analysis.
         </p>
@@ -126,21 +125,12 @@ export function GitHubRepositoriesPanel(): JSX.Element {
     return (
       <ul className="space-y-3">
         {trackedRepos.map((repo) => (
-          <li
-            key={repo.repo_id}
-            className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4"
-          >
+          <li key={repo.repo_id} className="rounded-2xl border border-ui/40 bg-glass p-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-sm font-semibold text-white">
-                  {repo.full_name}
-                </p>
-                <p className="text-xs text-slate-400">
-                  {repo.description ?? "No description provided."}
-                </p>
-                <p className="text-xs text-slate-500">
-                  Branch: {repo.default_branch} · Sync status: {repo.sync_status}
-                </p>
+                <p className="text-sm font-semibold text-ui">{repo.full_name}</p>
+                <p className="text-xs text-muted">{repo.description ?? "No description provided."}</p>
+                <p className="text-xs text-muted">Branch: {repo.default_branch} · Sync status: {repo.sync_status}</p>
               </div>
               <button
                 type="button"
@@ -160,7 +150,7 @@ export function GitHubRepositoriesPanel(): JSX.Element {
   const renderRepositorySelector = () => {
     if (availableLoading) {
       return (
-        <div className="flex items-center gap-2 text-sm text-slate-400">
+        <div className="flex items-center gap-2 text-sm text-muted">
           <LoadingSpinner /> Loading repositories...
         </div>
       );
@@ -175,19 +165,15 @@ export function GitHubRepositoriesPanel(): JSX.Element {
     }
     if (!availableRepos.length) {
       return (
-        <p className="text-sm text-slate-400">
-          GitHub did not return any repositories for your account.
-        </p>
+        <p className="text-sm text-muted">GitHub did not return any repositories for your account.</p>
       );
     }
     return (
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
         <div className="flex-1">
-          <label className="text-[10px] uppercase tracking-[0.35em] text-slate-500">
-            Select Repository
-          </label>
+          <label className="text-[10px] uppercase tracking-[0.35em] text-muted">Select Repository</label>
           <select
-            className="mt-1 w-full rounded-2xl border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-white"
+            className="mt-1 w-full rounded-2xl border border-ui bg-panel px-3 py-2 text-sm text-ui"
             value={selectedRepo}
             onChange={(event) => setSelectedRepo(event.target.value)}
           >
@@ -212,22 +198,15 @@ export function GitHubRepositoriesPanel(): JSX.Element {
   };
 
   return (
-    <Card className="border border-slate-800 bg-slate-950/70 p-5">
+    <Card className="p-5">
       <div className="mb-4 space-y-2">
-        <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
-          GitHub Repositories
-        </p>
-        <h2 className="text-xl font-semibold text-white">Connected Sources</h2>
-        <p className="text-sm text-slate-400">
-          Track repositories to bootstrap pull requests and hydrate the dashboard
-          with actionable findings.
-        </p>
+        <p className="text-xs uppercase tracking-[0.3em] text-muted">GitHub Repositories</p>
+        <h2 className="text-xl font-semibold text-ui">Connected Sources</h2>
+        <p className="text-sm text-muted">Track repositories to bootstrap pull requests and hydrate the dashboard with actionable findings.</p>
       </div>
       <div className="space-y-5">
         {renderTrackedList()}
-        <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
-          {renderRepositorySelector()}
-        </div>
+        <div className="rounded-2xl border border-ui/40 bg-glass p-4">{renderRepositorySelector()}</div>
       </div>
     </Card>
   );

@@ -1,9 +1,16 @@
 "use client";
 
-export function LoadingSpinner({ label }: { label?: string }): JSX.Element {
+import clsx from "clsx";
+
+type LoadingSpinnerProps = {
+  label?: string;
+  className?: string;
+};
+
+export function LoadingSpinner({ label, className }: LoadingSpinnerProps): JSX.Element {
   return (
-    <div className="flex items-center gap-2 text-slate-400">
-      <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-600 border-t-transparent" />
+    <div className={clsx("flex items-center gap-2 text-muted", className)}>
+      <span className="h-3 w-3 animate-spin rounded-full border-2 border-ui/60 border-t-transparent" />
       <span className="text-xs uppercase tracking-[0.3em]">{label ?? "Loading"}</span>
     </div>
   );

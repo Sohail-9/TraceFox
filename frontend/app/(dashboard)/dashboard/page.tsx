@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { Card } from "@/components/Card";
+import DataCard from "@/components/DataCard";
 import { DashboardHeader } from "@/components/dashboard/header";
 import { AnalyticsPanel } from "@/components/dashboard/AnalyticsPanel";
 import { LoadingSpinner } from "@/components/common/loading-spinner";
@@ -66,15 +67,12 @@ export default function DashboardPage(): JSX.Element {
       />
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {summaryCards.map((card) => (
-          <Card
+          <DataCard
             key={card.label}
-            className="border border-slate-800 bg-slate-950/70 p-4"
-          >
-            <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
-              {card.label}
-            </p>
-            <p className="text-2xl font-semibold text-white">{card.value}</p>
-          </Card>
+            title={card.label}
+            value={card.value}
+            className=""
+          />
         ))}
       </div>
       <div className="grid gap-6 lg:grid-cols-2">
@@ -108,7 +106,7 @@ export default function DashboardPage(): JSX.Element {
             {reviewFetching ? <LoadingSpinner /> : null}
           </div>
           <PRAnalysisPanel
-            review={review}
+            review={review ?? undefined}
             loading={reviewLoading}
             onFeedback={(id, reaction) =>
               submitFindingFeedback(id, reaction, mutateReview)
