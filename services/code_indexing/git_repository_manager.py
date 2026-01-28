@@ -37,7 +37,7 @@ class GitRepositoryManager:
         self._store = store or repository_store
         self._indexing = indexing_service
         self._storage_path = storage_path or _default_storage_path()
-        self._simulate = (os.environ.get("TRACEFOX_ENABLE_ACTUAL_CLONE", "false").lower() != "true")
+        self._simulate = (os.environ.get("TRACEFOX_ENABLE_ACTUAL_CLONE", "true").lower() != "true")
         self._tasks: set[asyncio.Task[Any]] = set()
 
     async def list_tracked(self, user_id: str) -> Dict[str, Any]:

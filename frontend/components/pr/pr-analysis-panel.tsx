@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import clsx from "clsx";
 
 import { FindingsFilter } from "@/components/analysis/findings-filter";
 import { FindingsList } from "@/components/analysis/findings-list";
@@ -51,31 +52,30 @@ export function PRAnalysisPanel({ review, loading, onFeedback }: Props): JSX.Ele
   };
 
   return (
-    <div className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-4">
+    <div className="animate-fade-in space-y-6">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Total Findings" value={stats.total} />
-        <StatCard label="Must Fix" value={stats.mustFix} tone="text-rose-200" />
-        <StatCard
-          label="Should Fix"
-          value={stats.shouldFix}
-          tone="text-amber-200"
-        />
-        <StatCard
-          label="Nice to Fix"
-          value={stats.niceToFix}
-          tone="text-emerald-200"
-        />
+        <StatCard label="Must Fix" value={stats.mustFix} tone="rose" />
+        <StatCard label="Should Fix" value={stats.shouldFix} tone="amber" />
+        <StatCard label="Nice to Fix" value={stats.niceToFix} tone="emerald" />
       </div>
-      <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4 text-xs text-slate-400">
-        <p>
-          Primary model: <span className="text-white">{review.primary_model}</span>
-        </p>
-        <p>
-          Duration: <span className="text-white">{review.duration_ms} ms</span>
-        </p>
+
+      <div className="flex items-center gap-4 rounded-xl border border-white/5 bg-white/5 p-3 text-[11px] text-slate-400">
+        <div className="flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-indigo-400" />
+          Model: <span className="font-medium text-slate-200">{review.primary_model}</span>
+        </div>
+        <div className="h-3 w-px bg-white/10" />
+        <div className="flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+          Duration: <span className="font-medium text-slate-200">{review.duration_ms} ms</span>
+        </div>
       </div>
-      <FindingsFilter />
-      <FindingsList findings={findings} onFeedback={onFeedback} />
+
+      <div className="space-y-4">
+        <FindingsFilter />
+        <FindingsList findings={findings} onFeedback={onFeedback} />
+      </div>
     </div>
   );
 }
@@ -83,16 +83,26 @@ export function PRAnalysisPanel({ review, loading, onFeedback }: Props): JSX.Ele
 function StatCard({
   label,
   value,
-  tone = "text-white",
+  tone = "indigo",
 }: {
   label: string;
   value: number;
-  tone?: string;
+  tone?: "indigo" | "rose" | "amber" | "emerald";
 }) {
+  const TONE_CLASSES = {
+    indigo: "text-indigo-400 border-indigo-500/20 bg-indigo-500/5",
+    rose: "text-rose-400 border-rose-500/20 bg-rose-500/5",
+    amber: "text-amber-400 border-amber-500/20 bg-amber-500/5",
+    emerald: "text-emerald-400 border-emerald-500/20 bg-emerald-500/5",
+  };
+
   return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-4 py-3 text-sm">
-      <p className="text-xs uppercase tracking-[0.3em] text-slate-500">{label}</p>
-      <p className={`text-2xl font-semibold ${tone}`}>{value}</p>
+    <div className={clsx(
+      "rounded-2xl border p-4 transition-all duration-300 hover:shadow-lg",
+      TONE_CLASSES[tone]
+    )}>
+      <p className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-60">{label}</p>
+      <p className="mt-1 text-2xl font-bold">{value}</p>
     </div>
   );
 }

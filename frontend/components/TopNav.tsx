@@ -1,61 +1,44 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
-import RepoPicker from "@/components/RepoPicker";
-
-const NAV_ITEMS = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/dashboard/pull-requests", label: "Pull Requests" },
-  { href: "/dashboard/analytics", label: "Analytics" },
-];
+import React from "react";
 
 export function TopNav(): JSX.Element {
   const pathname = usePathname();
+  const segments = pathname.split("/").filter(Boolean);
+
   return (
-    <nav 
-      aria-label="Main navigation"
-      className="sticky top-0 z-40 mb-8 flex items-center justify-between rounded-2xl border border-ui bg-panel px-4 py-2 backdrop-blur"
-    >
-      <div>
-        <p className="text-xs uppercase tracking-[0.35em] text-slate-500">
-          TraceFox
-        </p>
-        <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-slate-400">
-          TraceFox Control Center
-        </p>
-      </div>
-        <div className="flex items-center gap-4 text-xs font-semibold uppercase tracking-wide">
-        {NAV_ITEMS.map((item) => {
-          const isActive = pathname === item.href;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              aria-current={isActive ? "page" : undefined}
-              className={
-                "rounded-full border px-3 py-1 transition " +
-                "focus:outline-none focus:ring-2 focus:ring-brand/50 " +
-                (isActive
-                  ? "border-brand-400/70 bg-brand-500/20 text-white"
-                  : "border-slate-700/60 text-slate-400 hover:border-brand-400/40 hover:text-brand-100")
-              }
-            >
-              {item.label}
-            </Link>
-          );
-        })}
-      </div>
-        <div className="flex items-center gap-3">
-          <div className="hidden md:block">
-              <input
-                aria-label="Search"
-                placeholder="Search findings, pull requests, files..."
-                className="rounded-md border border-ui/40 bg-glass px-3 py-2 text-sm text-ui placeholder:text-muted focus:ring-2 focus:ring-brand/50"
-              />
-          </div>
-          <RepoPicker />
+    <header className="sticky top-0 z-40 px-8 py-4">
+      <div className="flex items-center justify-between rounded-2xl bg-glass border border-white/5 backdrop-blur-md px-6 py-3 shadow-lg">
+        {/* Breadcrumbs */}
+        <div className="flex items-center gap-2 text-sm font-medium">
+          {segments.map((segment, index) => (
+            <React.Fragment key={segment}>
+              {index > 0 && <span className="text-slate-600">/</span>}
+              <span
+                className={
+                  index === segments.length - 1
+                    ? "text-brand-400 capitalize"
+                    : "text-slate-400 capitalize"
+                }
+              >
+                {segment.replace("-", " ")}
+              </span>
+            </React.Fragment>
+          ))}
         </div>
-    </nav>
+
+        {/* Right Actions */}
+        <div className="flex items-center gap-4">
+          <button className="text-xs font-bold uppercase tracking-wider text-slate-500 hover:text-slate-300 transition-colors">
+            Feedback
+          </button>
+          <div className="h-4 w-px bg-white/10" />
+          <button className="text-xs font-bold uppercase tracking-wider text-brand-400 hover:text-brand-300 transition-colors">
+            Docs
+          </button>
+        </div>
+      </div>
+    </header>
   );
 }

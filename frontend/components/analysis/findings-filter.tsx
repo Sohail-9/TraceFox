@@ -1,6 +1,7 @@
 "use client";
 
 import { useAnalysisStore } from "@/store/analysis-store";
+import clsx from "clsx";
 
 const severityOptions = ["high", "medium", "low"];
 const categoryOptions = [
@@ -19,13 +20,14 @@ export function FindingsFilter(): JSX.Element {
   const selectCategory = useAnalysisStore((state) => state.selectCategory);
 
   return (
-    <div className="flex flex-wrap gap-3 rounded-2xl border border-slate-800 bg-slate-950/60 p-4 text-xs text-slate-300">
+    <div className="flex flex-col gap-4 rounded-2xl border border-white/5 bg-slate-900/40 p-5 shadow-inner">
       <FilterGroup
         label="Severity"
         value={severity}
         options={severityOptions}
         onChange={selectSeverity}
       />
+      <div className="h-px w-full bg-white/5" />
       <FilterGroup
         label="Category"
         value={category}
@@ -49,34 +51,38 @@ function FilterGroup({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <span className="text-[10px] uppercase tracking-[0.35em] text-slate-500">
+      <span className="min-w-[70px] text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">
         {label}
       </span>
-      <button
-        type="button"
-        onClick={() => onChange(null)}
-        className={`rounded-full border px-2 py-1 ${
-          value === null
-            ? "border-brand-400/70 text-brand-100"
-            : "border-slate-700 text-slate-400"
-        }`}
-      >
-        All
-      </button>
-      {options.map((option) => (
+      <div className="flex flex-wrap gap-1.5">
         <button
-          key={option}
           type="button"
-          onClick={() => onChange(option)}
-          className={`rounded-full border px-2 py-1 capitalize ${
-            value === option
-              ? "border-brand-400/70 text-brand-100"
-              : "border-slate-700 text-slate-400"
-          }`}
+          onClick={() => onChange(null)}
+          className={clsx(
+            "rounded-lg px-3 py-1.5 text-[11px] font-medium transition-all duration-200",
+            value === null
+              ? "bg-indigo-500/10 text-indigo-400 ring-1 ring-inset ring-indigo-500/30"
+              : "text-slate-500 hover:bg-white/5 hover:text-slate-300"
+          )}
         >
-          {option.replace("_", " ")}
+          All
         </button>
-      ))}
+        {options.map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => onChange(option)}
+            className={clsx(
+              "rounded-lg px-3 py-1.5 text-[11px] font-medium capitalize transition-all duration-200",
+              value === option
+                ? "bg-indigo-500/10 text-indigo-100 ring-1 ring-inset ring-indigo-500/40"
+                : "text-slate-500 hover:bg-white/5 hover:text-slate-300"
+            )}
+          >
+            {option.replace("_", " ")}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

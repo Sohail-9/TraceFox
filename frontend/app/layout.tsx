@@ -28,7 +28,10 @@ export default function RootLayout({
           "min-h-screen bg-slate-950 text-slate-100 antialiased"
         )}
       >
-        <Providers>{children}</Providers>
+        <Providers>
+          {children}
+          {/* TODO: Add <Analytics /> component here (e.g. Vercel Analytics or Google Analytics) */}
+        </Providers>
       </body>
     </html>
   );

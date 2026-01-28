@@ -201,8 +201,8 @@ class TestGenerationService:
 
     def _fallback_code(self, finding: Finding, test_type: TestType) -> str:
         header = f"def test_{finding.id[:8]}_{test_type.value.replace('-', '_')}():"
-        docstring = f'    """TraceFox fallback test for {finding.file_path}."""'
-        body = "    # TODO: replace with generated assertions once Gemma is available\n    assert True"
+        docstring = f'    """TraceFox fallback test for {finding.file_path}: {finding.message[:50]}..."""'
+        body = f"    # TraceFox: This is a placeholder test for: {finding.message}\n    # Recommended fix: {finding.suggested_fix or 'Not provided'}\n    assert True"
         return "\n".join([header, docstring, body])
 
     def _safe_load_json(self, content: str) -> Dict[str, Any]:

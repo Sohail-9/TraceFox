@@ -57,7 +57,7 @@ export default function DashboardPage(): JSX.Element {
   }, [operations]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-in">
       <DashboardHeader
         suggestedRepository={operations?.pr_registry?.[0]?.repository_name}
         suggestedPrNumber={operations?.pr_registry?.[0]?.pull_request_number}
@@ -65,24 +65,24 @@ export default function DashboardPage(): JSX.Element {
           mutateOperations();
         }}
       />
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {summaryCards.map((card) => (
           <DataCard
             key={card.label}
             title={card.label}
             value={card.value}
-            className=""
+            isLoading={operationsLoading}
           />
         ))}
       </div>
       <div className="grid gap-6 lg:grid-cols-2">
-        <Card className="border border-slate-800 bg-slate-950/60 p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
+        <Card accent="slate" className="p-6">
+          <div className="mb-6 flex items-center justify-between">
+            <div className="space-y-1">
+              <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-indigo-400/80">
                 Pull Requests
               </p>
-              <h2 className="text-lg font-semibold">Recent Activity</h2>
+              <h2 className="text-xl font-bold tracking-tight text-slate-100">Recent Activity</h2>
             </div>
             {operationsLoading ? <LoadingSpinner /> : null}
           </div>
@@ -93,14 +93,14 @@ export default function DashboardPage(): JSX.Element {
             onSelect={(prId) => setSelectedPrId(prId)}
           />
         </Card>
-        <Card className="border border-slate-800 bg-slate-950/60 p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
+        <Card accent="slate" className="p-6">
+          <div className="mb-6 flex items-center justify-between">
+            <div className="space-y-1">
+              <p className="text-[10px] font-bold uppercase tracking-[0.3em] text-indigo-400/80">
                 Analysis
               </p>
-              <h2 className="text-lg font-semibold">
-                Active PR · {activePrId ?? "N/A"}
+              <h2 className="text-xl font-bold tracking-tight text-slate-100">
+                {activePrId ? `PR · ${activePrId.slice(0, 8)}` : "No PR Selected"}
               </h2>
             </div>
             {reviewFetching ? <LoadingSpinner /> : null}

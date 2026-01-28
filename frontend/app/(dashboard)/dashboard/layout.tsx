@@ -47,10 +47,12 @@ export default function DashboardLayout({
         Skip to main content
       </a>
 
+      {/* Floating Sidebar (fixed) */}
       <Sidebar />
 
+      {/* Main Content Area (pushed right) */}
       <main
-        className="flex flex-1 flex-col border-l border-ui/60 bg-panel/70"
+        className="flex min-h-screen flex-1 flex-col pl-72 transition-all duration-300"
         tabIndex={-1}
       >
         <TopNav />

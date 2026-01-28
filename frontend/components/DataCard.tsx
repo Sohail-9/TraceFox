@@ -3,6 +3,7 @@
 import clsx from "clsx";
 import { ReactNode } from "react";
 import tokens from "@/theme-tokens";
+import { GlassCard } from "@/components/ui/glass-card";
 
 type DataCardProps = {
   title: string;
@@ -14,78 +15,75 @@ type DataCardProps = {
   error?: string | null;
 };
 
-export function DataCard({ 
-  title, 
-  value, 
-  caption, 
-  icon, 
+export function DataCard({
+  title,
+  value,
+  caption,
+  icon,
   className,
   isLoading = false,
   error = null
 }: DataCardProps) {
   const ariaLabel = `${title} data card${error ? ' with error' : ''}`;
-  
+
   return (
-    <div
-      role="region"
-      aria-label={ariaLabel}
+    <GlassCard
+      intensity="low"
       className={clsx(
-        "group relative flex items-start gap-4 rounded-2xl border border-ui bg-glass p-4",
-        "transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg",
-        "bg-gradient-to-b from-glass/50 to-glass/20 hover:from-glass/70 hover:to-glass/40",
-        "focus:ring-2 focus:ring-brand/50 outline-none focus:outline-none",
-        "sm:p-6",
+        "flex flex-col p-5 h-full justify-between transition-transform duration-300 hover:scale-[1.02]",
         className
       )}
-      tabIndex={0}
     >
-      {!isLoading && icon ? (
-        <div
-          className="mt-1 text-2xl"
-          style={{ color: tokens.colors.brand }}
-          aria-hidden="true"
-        >
-          {icon}
+      <div
+        role="region"
+        aria-label={ariaLabel}
+        className="flex items-start justify-between gap-4"
+      >
+        <div className="space-y-2">
+          <p
+            className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500"
+            aria-label={`${title} label`}
+          >
+            {title}
+          </p>
+
+          {isLoading ? (
+            <div className="h-8 w-24 animate-pulse rounded bg-white/10" />
+          ) : error ? (
+            <div className="text-danger text-sm">{error}</div>
+          ) : (
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-bold tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-white to-slate-400">
+                {typeof value === 'number' ? value.toLocaleString() : value}
+              </span>
+            </div>
+          )}
         </div>
-      ) : null}
-      
-      {isLoading && (
-        <div className="mt-1 h-8 w-8 animate-pulse rounded-full bg-ui/20" />
-      )}
-      <div className="flex-1 space-y-2">
-        {isLoading ? (
-          <>
-            <div className="h-4 w-24 animate-pulse rounded bg-ui/20" />
-            <div className="h-8 w-32 animate-pulse rounded bg-ui/20" />
-          </>
-        ) : error ? (
-          <div className="text-danger">
-            <p className="text-sm font-medium">Error loading data</p>
-            <p className="text-xs">{error}</p>
+
+        {/* Icon Container with Glow */}
+        {!isLoading && icon && (
+          <div className="relative group/icon">
+            <div className="absolute inset-0 bg-brand-500/20 blur-xl rounded-full opacity-0 group-hover/icon:opacity-100 transition-opacity" />
+            <div className="relative h-10 w-10 flex items-center justify-center rounded-xl bg-white/5 border border-white/10 text-brand-400">
+              {icon}
+            </div>
           </div>
-        ) : (
-          <>
-            <p 
-              className="text-xs uppercase tracking-wide text-muted-foreground"
-              aria-label={`${title} label`}
-            >
-              {title}
-            </p>
-            <p 
-              className="mt-1 text-2xl font-semibold text-foreground"
-              aria-live="polite"
-            >
-              {typeof value === 'number' ? value.toLocaleString() : value}
-            </p>
-            {caption && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                {caption}
-              </p>
-            )}
-          </>
         )}
       </div>
-    </div>
+
+      {/* Caption / Footer */}
+      {(caption || isLoading) && (
+        <div className="mt-4 pt-4 border-t border-white/5">
+          {isLoading ? (
+            <div className="h-3 w-2/3 animate-pulse rounded bg-white/5" />
+          ) : (
+            <p className="text-xs text-slate-500 font-medium">
+              {caption}
+            </p>
+          )}
+        </div>
+      )}
+    </GlassCard>
   );
 }
 
