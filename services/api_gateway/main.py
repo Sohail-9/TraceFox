@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI, HTTPException, Path, Query, Response, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Path, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
 from services.api_gateway.routes.auth import require_user, router as auth_router
@@ -33,13 +33,16 @@ app = FastAPI(
     description="Entry point for TraceFox backend services.",
 )
 
-allowed_origins = list(settings.api_gateway_allowed_origins or [])
-if not allowed_origins:
+if settings.environment == "development":
     allowed_origins = ["*"]
-    # Disallow credentials with wildcard origin
-    allow_creds = False
-else:
     allow_creds = True
+else:
+    allowed_origins = list(settings.api_gateway_allowed_origins or [])
+    if not allowed_origins:
+        allowed_origins = ["*"]
+        allow_creds = False
+    else:
+        allow_creds = True
 
 app.add_middleware(
     CORSMiddleware,
@@ -66,8 +69,12 @@ async def handle_webhook(
     provider: str,
     payload: WebhookPayload,
     signature: str = Header(None, alias="X-Hub-Signature-256"),
+    event_type: str = Header("pull_request", alias="X-GitHub-Event"),
     svc: TraceFoxServiceRegistry = Depends(get_registry),
 ) -> dict:
+    # Inject event type from header if not explicitly set in body
+    payload.event_type = event_type
+    
     if not validate_webhook_signature(provider, payload, signature):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

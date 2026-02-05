@@ -168,8 +168,8 @@ def api_app(tmp_path_factory) -> FastAPI:
 
     reload_settings()
     from services.shared.auth import reset_auth_service
-import services.api_gateway.routes.github as github_routes
-import services.api_gateway.service_registry as registry_module
+    import services.api_gateway.routes.github as github_routes
+    import services.api_gateway.service_registry as registry_module
 
     reset_auth_service()
 

@@ -9,6 +9,8 @@ from collections import Counter, OrderedDict
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
+from services.shared.cache import cache
+
 from services.integrations.github_publisher import publisher
 from services.query.service import QueryOrchestrationService
 from services.review_engine.router import ModelRouter
@@ -53,68 +55,166 @@ class PRAnalysisEngine:
         self._reviews: Dict[str, ReviewSummary] = {}
         self._lock = asyncio.Lock()
         self.router = ModelRouter()
-        self._response_cache: OrderedDict[str, Any] = OrderedDict()
-        self._max_cache_entries = 128
 
-    async def run_review(self, pr_id: str, payload: WebhookPayload) -> ReviewSummary:
+    async def run_review(
+        self,
+        pr_id: str,
+        payload: WebhookPayload,
+        progress_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+    ) -> ReviewSummary:
         async with self._lock:
+            # Check if review already exists
+            if pr_id in self._reviews:
+                return self._reviews[pr_id]
+
             start_time = time.perf_counter()
+
+            if progress_callback:
+                await progress_callback("⏳ Initializing analysis...")
+
+            # 1. Prepare data
             diff = self._compose_diff(payload)
             context = self._build_context(payload)
-            quick_filter = await asyncio.to_thread(self._quick_filter, diff)
+            quick_filter = await self._quick_filter(diff)
             routing_snapshot = {
                 "quick_filter": self.router.route_analysis("quick_filter"),
                 "security": self.router.route_analysis("security"),
-                "breaking_changes": self.router.route_analysis("breaking_changes"),
-                "cross_layer": self.router.route_analysis("cross_layer"),
+                "logic": self.router.route_analysis("logic"),
             }
-            metadata = {"quick_filter": quick_filter, "context": context, "routing": routing_snapshot}
-
-            if not quick_filter.get("has_issues", True):
+            
+            # 2. Quick Filter
+            if not quick_filter.get("has_issues", False):
                 logger.info("Quick filter suppressed analysis for %s: %s", pr_id, quick_filter.get("reason"))
-                review = self._finalise_review(
-                    pr_id,
-                    payload,
-                    [],
-                    metadata,
-                    start_time,
-                    summary_override=f"No significant issues detected. {quick_filter.get('reason', '').strip()}",
+                if progress_callback:
+                    await progress_callback("✅ No significant issues found during quick scan.")
+                review = ReviewSummary(
+                    review_id=str(uuid4()),
+                    pr_id=pr_id,
+                    repository=payload.repository.name,
+                    pr_number=payload.pull_request.number,
+                    status=AnalysisStatus.completed,
+                    findings=[],
+                    summary=f"No significant issues detected. {quick_filter.get('reason', '').strip()}",
+                    model_used="quick_filter",
+                    routing_info=routing_snapshot,
+                    processing_time_ms=int((time.perf_counter() - start_time) * 1000),
+                    total_findings=0,
+                    metadata={"quick_filter": quick_filter, "context": context},
                 )
                 self._reviews[pr_id] = review
                 await event_bus.publish(
                     "review:completed",
                     {"pr_id": pr_id, "review_id": review.review_id, "total_findings": review.total_findings},
                 )
-                self._publish_to_github(review, payload)
+                await self._publish_to_github(review, payload)
                 return review
 
-            tasks = [
-                asyncio.to_thread(self._analyze_security_and_style, diff),
-                asyncio.to_thread(self._analyze_complex_logic, diff, context),
-                asyncio.to_thread(self._analyze_cross_file_impact, payload.files),
-            ]
-            chunks = await asyncio.gather(*tasks, return_exceptions=True)
-            findings: List[Finding] = []
-            for chunk in chunks:
-                if isinstance(chunk, Exception):
-                    logger.error("Analysis chunk failed for PR %s: %s", pr_id, chunk)
-                    continue
-                findings.extend(chunk)
+            if progress_callback:
+                await progress_callback("🛡️ Analyzing security and style...")
+            
+            security_findings = await self._analyze_security_and_style(diff)
+            
+            if progress_callback:
+                await progress_callback("🧠 Analyzing complex logic and architecture...")
+            
+            logic_findings = await self._analyze_complex_logic(diff, context)
+            
+            if progress_callback:
+                await progress_callback("🚀 Analyzing performance impact...")
+            
+            perf_findings = await self._analyze_performance(diff)
+            
+            if progress_callback:
+                await progress_callback("🕸️ Analyzing cross-file dependencies...")
+                
+            impact_findings = await asyncio.to_thread(self._analyze_cross_file_impact, payload.files)
 
-            scored = self._score_findings(findings)
+            all_findings: List[Finding] = []
+            all_findings.extend(security_findings)
+            all_findings.extend(logic_findings)
+            all_findings.extend(perf_findings)
+            all_findings.extend(impact_findings)
+
+            scored = self._score_findings(all_findings)
             scored = [
                 f
                 for f in scored
                 if (str(f.classification).upper() if f.classification else "") != FindingPriority.suppressed.value
             ]
-            review = self._finalise_review(pr_id, payload, scored, metadata, start_time)
+            
+            if progress_callback:
+                await progress_callback("✅ Analysis complete. Generating report...")
+            
+            review = ReviewSummary(
+                review_id=str(uuid4()),
+                pr_id=pr_id,
+                repository=payload.repository.name,
+                pr_number=payload.pull_request.number,
+                status=AnalysisStatus.completed,
+                findings=scored,
+                summary=self._build_summary_text(scored),
+                model_used=self._resolve_primary_model(scored),
+                routing_info=routing_snapshot,
+                processing_time_ms=int((time.perf_counter() - start_time) * 1000),
+                total_findings=len(scored),
+                metadata={"quick_filter": quick_filter, "context": context},
+            )
+            
             self._reviews[pr_id] = review
             await event_bus.publish(
                 "review:completed",
                 {"pr_id": pr_id, "review_id": review.review_id, "total_findings": review.total_findings},
             )
-            self._publish_to_github(review, payload)
+            await self._publish_to_github(review, payload)
             return review
+
+    async def handle_conversation(
+        self,
+        pr_id: str,
+        question: str,
+        finding_id: Optional[str] = None,
+    ) -> str:
+        """Process a user question about a finding or the PR and return a response."""
+        review = await self.get_review(pr_id)
+        context_finding = None
+        if review and finding_id:
+            context_finding = next((f for f in review.findings if f.id == finding_id), None)
+
+        system_prompt = (
+            "You are TraceFox, a world-class code reviewer and architectural assistant. "
+            "A developer is asking you a question about your previous review findings. "
+            "Be helpful, concise, and provide code examples if applicable."
+        )
+        
+        user_prompt = f"Question: {question}\n\n"
+        if context_finding:
+            user_prompt += (
+                f"Context Finding:\n"
+                f"- File: {context_finding.file_path}\n"
+                f"- Line: {context_finding.line_number}\n"
+                f"- Issue: {context_finding.message}\n"
+                f"- Suggestion: {context_finding.suggested_fix}\n"
+            )
+        elif review:
+            user_prompt += f"Context: This is about PR #{review.pr_number} in {review.repository}."
+
+        # Pass specific keyword arguments to match call_chat_completion signature
+        response = await asyncio.to_thread(
+            self.deepseek_call,
+            model=self.deepseek_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=1024,
+            temperature=0.3
+        )
+        
+        choices = (response or {}).get("choices") or []
+        if not choices:
+            return "I'm sorry, I'm having trouble processing that request right now."
+        
+        return choices[0].get("message", {}).get("content", "I don't have an answer for that yet.")
 
     async def get_review(self, pr_id: str) -> Optional[ReviewSummary]:
         return self._reviews.get(pr_id)
@@ -125,13 +225,13 @@ class PRAnalysisEngine:
 
     # ---------- analysis stages ----------
 
-    def _quick_filter(self, diff: str) -> Dict[str, Any]:
+    async def _quick_filter(self, diff: str) -> Dict[str, Any]:
         prompt = (
             "Quickly scan this diff and identify if there are ANY significant issues:\n"
             f"{diff}\n"
             'Respond with JSON {"has_issues": true|false, "reason": "brief explanation"}'
         )
-        result = self._cached_result(
+        result = await self._cached_result(
             "quick-filter",
             diff,
             lambda: self.quick_filter_client.generate(prompt, max_tokens=256),
@@ -147,15 +247,20 @@ class PRAnalysisEngine:
         except json.JSONDecodeError:
             return {"has_issues": True, "reason": "LLM parsing fallback"}
 
-    def _analyze_security_and_style(self, diff: str) -> List[Finding]:
+    async def _analyze_security_and_style(self, diff: str) -> List[Finding]:
         prompt = (
-            "Analyze this code diff for security issues and style violations:\n"
-            f"{diff}\n"
-            "Identify security vulnerabilities, code style violations, and anti-patterns.\n"
-            "Return JSON array with findings keyed as "
+            "You are a world-class code reviewer. Analyze this code diff for security issues and style violations.\n\n"
+            "Diff:\n"
+            f"{diff}\n\n"
+            "Instructions:\n"
+            "1. Identify security vulnerabilities (SQL injection, XSS, hardcoded secrets, etc.).\n"
+            "2. Identify style violations and anti-patterns (naming, complexity, dry principle, etc.).\n"
+            "3. Provide actionable feedback with specific line numbers.\n"
+            "4. For any fix, provide a 'suggested_fix' using exact code that should replace the current line(s).\n\n"
+            "Return a JSON array of findings with these keys: "
             "['id','file_path','line_number','severity','type','message','suggested_fix','impact','confidence']."
         )
-        response = self._cached_result(
+        response = await self._cached_result(
             "security-style",
             diff,
             lambda: self.security_client.generate(prompt, max_tokens=1024, temperature=0.2),
@@ -164,7 +269,7 @@ class PRAnalysisEngine:
             return []
         return self._parse_llm_findings(response["response"], FindingSource.llama)
 
-    def _analyze_complex_logic(self, diff: str, context: Dict[str, Any]) -> List[Finding]:
+    async def _analyze_complex_logic(self, diff: str, context: Dict[str, Any]) -> List[Finding]:
         payload = {
             "diff": diff,
             "context": context,
@@ -174,7 +279,7 @@ class PRAnalysisEngine:
             ],
         }
         context_blob = json.dumps(context, sort_keys=True)
-        response = self._cached_result(
+        response = await self._cached_result(
             "deepseek-breaking",
             f"{diff}:{context_blob}",
             lambda: self.deepseek_call(
@@ -211,6 +316,27 @@ class PRAnalysisEngine:
                 "DeepSeek usage prompt=%s completion=%s cost=$%.6f", prompt_tokens, completion_tokens, cost
             )
         return self._parse_llm_findings(content, FindingSource.deepseek)
+
+    async def _analyze_performance(self, diff: str) -> List[Finding]:
+        prompt = (
+            "You are a performance optimization expert. Analyze this code diff for potential performance regressions or optimizations:\n\n"
+            "Diff:\n"
+            f"{diff}\n\n"
+            "Instructions:\n"
+            "1. Look for N+1 query problems, inefficient loops, or large memory allocations.\n"
+            "2. Identify missing indices or inefficient data structures.\n"
+            "3. Suggest concrete improvements with code examples.\n"
+            "Return a JSON array of findings keyed as "
+            "['id','file_path','line_number','severity','type','message','suggested_fix','impact','confidence']."
+        )
+        response = await self._cached_result(
+            "performance-analysis",
+            diff,
+            lambda: self.security_client.generate(prompt, max_tokens=1024, temperature=0.1),
+        )
+        if response["status"] != "success":
+            return []
+        return self._parse_llm_findings(response["response"], FindingSource.llama)
 
     def _analyze_cross_file_impact(self, files: List[FilePayload]) -> List[Finding]:
         findings: List[Finding] = []
@@ -364,14 +490,65 @@ class PRAnalysisEngine:
             scored.append(Finding(**payload))
         return scored
 
+    def _generate_mermaid_chart(self, findings: List[Finding]) -> str:
+        """Generate a Mermaid.js dependency graph from cross-layer findings."""
+        edges = set()
+        for f in findings:
+            if f.type == FindingCategory.cross_layer and f.metadata:
+                source = f.file_path.split("/")[-1]
+                # We assume metadata contains dependency info or we extract from message
+                # For now, let's look for known patterns or just map file -> finding type
+                edges.add(f'{source} -->|"Impacts"| Unknown(("Dependent Components"))')
+                
+                # Ideally, finding metadata should have 'affected_files' list
+                affected = f.metadata.get("affected_files", [])
+                for target in affected:
+                     target_name = target.split("/")[-1]
+                     edges.add(f'{source} -->|"{f.impact or "Calls"}"| {target_name}')
+
+        if not edges:
+            return ""
+
+        chart = ["```mermaid", "graph TD"]
+        chart.extend(f"    {edge}" for edge in sorted(edges))
+        chart.append("```")
+        return "\n".join(chart)
+
     def _build_summary_text(self, findings: List[Finding]) -> str:
         if not findings:
-            return "No actionable issues detected across quick filter, Llama, or DeepSeek stages."
+            return "### TraceFox Review: No issues detected\n\nI've analyzed your changes and found no significant issues. Great job!"
+        
         by_category = Counter(f.type for f in findings)
-        top_categories = ", ".join(f"{cat.value}:{count}" for cat, count in by_category.most_common())
-        priorities = Counter(f.classification for f in findings if f.classification)
-        priority_summary = ", ".join(f"{key}:{value}" for key, value in priorities.items())
-        return f"Identified {len(findings)} findings ({top_categories}). Priority mix: {priority_summary or 'balanced'}."
+        by_severity = Counter(f.severity for f in findings)
+        
+        summary_lines = [
+            "### TraceFox Review Summary",
+            f"I've identified **{len(findings)}** actionable findings across your PR.",
+            "",
+            "#### Breakdown by Severity",
+            f"- 🔴 **High**: {by_severity.get(FindingSeverity.high, 0)}",
+            f"- 🟡 **Medium**: {by_severity.get(FindingSeverity.medium, 0)}",
+            f"- 🟢 **Low**: {by_severity.get(FindingSeverity.low, 0)}",
+            "",
+            "#### Breakdown by Category"
+        ]
+        
+        for cat, count in by_category.most_common():
+            label = str(cat.value).replace('_', ' ').title()
+            summary_lines.append(f"- **{label}**: {count}")
+            
+        # Add Mermaid Chart if applicable
+        mermaid_chart = self._generate_mermaid_chart(findings)
+        if mermaid_chart:
+            summary_lines.append("")
+            summary_lines.append("#### 🕸️ Dependency Impact Analysis")
+            summary_lines.append(mermaid_chart)
+            
+        summary_lines.append("")
+        summary_lines.append("> [!TIP]")
+        summary_lines.append("> You can apply suggested fixes directly from the comments below.")
+        
+        return "\n".join(summary_lines)
 
     def _resolve_primary_model(self, findings: List[Finding]) -> str:
         if any(f.source_model == FindingSource.deepseek for f in findings):
@@ -408,12 +585,12 @@ class PRAnalysisEngine:
         )
         return review
 
-    def _publish_to_github(self, review: ReviewSummary, payload: WebhookPayload) -> None:
+    async def _publish_to_github(self, review: ReviewSummary, payload: WebhookPayload) -> None:
         logger.info("Generated review %s for PR %s", review.review_id, review.pr_id)
         try:
             repo_url = str(payload.repository.url)
             pr_number = int(payload.pull_request.number)
-            publisher.publish(
+            await publisher.publish(
                 repo_url=repo_url,
                 pr_number=pr_number,
                 head_sha=None,
@@ -423,20 +600,20 @@ class PRAnalysisEngine:
         except Exception as exc:  # pragma: no cover - publishing best-effort
             logger.warning("GitHub publish skipped: %s", exc)
 
-    def _cached_result(self, stage: str, payload: str, compute: Callable[[], Any]) -> Any:
-        cache_key = self._cache_key(stage, payload)
-        if cache_key in self._response_cache:
-            self._response_cache.move_to_end(cache_key)
-            return self._response_cache[cache_key]
-        result = compute()
-        self._response_cache[cache_key] = result
-        if len(self._response_cache) > self._max_cache_entries:
-            self._response_cache.popitem(last=False)
+    async def _cached_result(self, stage: str, payload: str, compute: Callable[..., Any]) -> Any:
+        cache_key = ["review", "engine", stage, hashlib.sha1(payload.encode("utf-8")).hexdigest()]
+        cached = await cache.get_json(cache_key)
+        if cached is not None:
+            return cached
+        
+        # If compute is a coroutine, await it, otherwise run it in a thread if it's blocking
+        if asyncio.iscoroutinefunction(compute):
+            result = await compute()
+        else:
+            result = compute()
+            
+        await cache.set_json(cache_key, result, ttl=3600)  # 1 hour cache
         return result
-
-    def _cache_key(self, stage: str, payload: str) -> str:
-        digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()
-        return f"{stage}:{digest}"
 
 
 # Convenience shim for backwards compatibility

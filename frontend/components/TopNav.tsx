@@ -1,7 +1,52 @@
 "use client";
 
-import { usePathname } from "next/navigation";
-import React from "react";
+import { usePathname, useRouter } from "next/navigation";
+import React, { useEffect, useState } from "react";
+import Link from "next/link";
+import { clearSession, loadUser, SessionUser } from "@/lib/session";
+
+function UserMenu(): JSX.Element | null {
+  const router = useRouter();
+  const [user, setUser] = useState<SessionUser | null>(null);
+
+  useEffect(() => {
+    setUser(loadUser());
+  }, []);
+
+  const handleSignOut = () => {
+    clearSession();
+    router.replace("/login");
+  };
+
+  if (!user) {
+    return null;
+  }
+
+  return (
+    <div className="flex items-center gap-3 pl-3 border-l border-white/10">
+      <div className="text-right hidden sm:block">
+        <p className="text-xs font-bold text-slate-200">{user.name || user.login}</p>
+      </div>
+      {user.avatar_url ? (
+        <img
+          src={user.avatar_url}
+          alt={user.login}
+          className="h-8 w-8 rounded-full border border-white/10 shadow-sm"
+        />
+      ) : (
+        <div className="h-8 w-8 rounded-full bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-xs font-bold text-indigo-300">
+          {user.login.slice(0, 2).toUpperCase()}
+        </div>
+      )}
+      <button
+        onClick={handleSignOut}
+        className="ml-2 text-[10px] font-bold uppercase tracking-widest text-rose-400 hover:text-rose-300 transition-colors"
+      >
+        Sign Out
+      </button>
+    </div>
+  );
+}
 
 export function TopNav(): JSX.Element {
   const pathname = usePathname();
@@ -37,6 +82,8 @@ export function TopNav(): JSX.Element {
           <button className="text-xs font-bold uppercase tracking-wider text-brand-400 hover:text-brand-300 transition-colors">
             Docs
           </button>
+
+          <UserMenu />
         </div>
       </div>
     </header>

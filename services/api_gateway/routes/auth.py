@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
@@ -31,13 +32,13 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: AuthenticatedUser
-    github_token: str | None = None
+    github_token: Optional[str] = None
 
 
 class DevLoginRequest(BaseModel):
     login: str
-    name: str | None = None
-    email: str | None = None
+    name: Optional[str] = None
+    email: Optional[str] = None
 
 
 @router.get("/login", response_model=LoginResponse)
@@ -74,7 +75,7 @@ async def github_dev_login(
 
 
 async def require_user(
-    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(bearer_scheme),
     service: AuthService = Depends(get_auth_service),
 ) -> AuthenticatedUser:
     if credentials is None:

@@ -741,6 +741,7 @@ class Settings:
             "token": source.get_str("github.token"),
             "app_id": source.get_str("github.app_id"),
             "private_key_pem": source.get_str("github.private_key_pem"),
+            "webhook_secret": source.get_str("github.webhook_secret"),
         }
         return cls(
             environment=source.require_str("environment"),

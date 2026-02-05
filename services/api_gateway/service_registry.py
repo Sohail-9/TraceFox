@@ -114,26 +114,142 @@ class TraceFoxServiceRegistry:
                 incremental=payload.action == "synchronize",
             )
         )
-        review_summary = await execute_with_resilience(
-            "ai-review.run",
-            self.review.run_review,
-            pr_id,
-            payload,
-        )
-        await event_bus.publish(
-            "api:webhook",
-            {"provider": provider, "pr_id": pr_id, "review_id": review_summary.review_id},
-        )
+        
+        # Handle @tracefox review or questions in comments
+        is_manual_trigger = False
+        is_question = False
+        if (payload.event_type in ["issue_comment", "pull_request_review_comment"]) and payload.comment:
+            comment_lower = payload.comment.lower()
+            if "@tracefox" in comment_lower:
+                if "review" in comment_lower:
+                    is_manual_trigger = True
+                else:
+                    is_question = True
+
+        if is_question:
+            async def run_conversation_task():
+                try:
+                    answer = await self.review.handle_conversation(
+                        pr_id=pr_id,
+                        question=payload.comment,
+                        finding_id=None
+                    )
+                    
+                    if payload.comment_id:
+                        await publisher.post_reply(
+                            owner=_owner_from_full_name(payload.repository.name),
+                            repo=_repo_from_full_name(payload.repository.name),
+                            pr_number=payload.pull_request.number,
+                            comment_id=payload.comment_id,
+                            body=answer
+                        )
+                    else:
+                        await publisher.publish(
+                            repo_url=str(payload.repository.url),
+                            pr_number=payload.pull_request.number,
+                            head_sha=None,
+                            findings=[],
+                            summary_text=answer,
+                            is_summary_only=True
+                        )
+                        
+                    self._log_activity(
+                        tone="success",
+                        title="Conversation handled",
+                        detail=f"Responded to user question on PR {pr_id}",
+                    )
+                except Exception as exc:
+                    logger.exception("Conversation task failed: %s", exc)
+
+            self._schedule_task(run_conversation_task(), name=f"conversation-{pr_id}")
+            return {"status": "accepted", "message": "Conversation initiated"}
+
+        # Skip full indexing update if it's just a non-mention comment
+        if (payload.event_type in ["issue_comment", "pull_request_review_comment"]) and not is_manual_trigger:
+             return {"status": "ignored", "message": "Comment does not trigger action"}
+
+        # Schedule the review as a background task
+        review_id = str(uuid4()) # Predictive ID or we can let run_review handle it
+        
+        async def run_review_task():
+            try:
+                # 1. Post initial "In Progress" comment
+                comment_id = await publisher._post_pr_comment(
+                    owner=_owner_from_full_name(payload.repository.name),
+                    repo=_repo_from_full_name(payload.repository.name),
+                    pr_number=payload.pull_request.number,
+                    body="### TraceFox Review\n\nStarting analysis... ⏳"
+                )
+
+                async def progress_callback(status_msg: str) -> None:
+                    # Update the existing comment
+                    if comment_id:
+                        await publisher.update_comment(
+                            owner=_owner_from_full_name(payload.repository.name),
+                            repo=_repo_from_full_name(payload.repository.name),
+                            comment_id=comment_id,
+                            body=f"### TraceFox Review\n\n{status_msg}"
+                        )
+
+                summary = await execute_with_resilience(
+                    "ai-review.run",
+                    self.review.run_review,
+                    pr_id,
+                    payload,
+                    progress_callback=progress_callback
+                )
+                
+                # Note: run_review will publish the FINAL summary via _publish_to_github
+                # But _publish_to_github in service.py posts a NEW review/comment.
+                # Ideally, we should update the initial comment with the final summary 
+                # instead of posting a new one. 
+                # For this iteration, we accept that run_review handles the final post.
+                # We could delete the progress comment or update it to say "See full review below".
+                # Let's update it to point to the main review to avoid clutter if we can't merge them easily.
+                if comment_id:
+                     await publisher.update_comment(
+                        owner=_owner_from_full_name(payload.repository.name),
+                        repo=_repo_from_full_name(payload.repository.name),
+                        comment_id=comment_id,
+                        body=f"### TraceFox Review\n\nAnalyis Complete! See the detailed report below. 👇"
+                    )
+
+                await event_bus.publish(
+                    "api:webhook",
+                    {"provider": provider, "pr_id": pr_id, "review_id": summary.review_id},
+                )
+                self._log_activity(
+                    tone="success",
+                    title="Webhook review completed",
+                    detail=f"PR {pr_id} analysis finished with {summary.total_findings} findings",
+                )
+            except Exception as exc:
+                logger.exception("Background review task failed for %s: %s", pr_id, exc)
+                self._log_activity(
+                    tone="error",
+                    title="Review failed",
+                    detail=f"Background analysis for PR {pr_id} failed: {exc}",
+                )
+                if 'comment_id' in locals() and comment_id:
+                     await publisher.update_comment(
+                        owner=_owner_from_full_name(payload.repository.name),
+                        repo=_repo_from_full_name(payload.repository.name),
+                        comment_id=comment_id,
+                        body=f"### TraceFox Review\n\n❌ Analysis failed: {str(exc)}"
+                    )
+
+        self._schedule_task(run_review_task(), name=f"webhook-review-{pr_id}")
+
         self._log_activity(
-            tone="success",
-            title="Webhook processed",
-            detail=f"PR {pr_id} via {provider} initiated review",
+            tone="info",
+            title="Webhook accepted",
+            detail=f"PR {pr_id} via {provider} accepted; analysis running in background",
         )
         return {
             "status": "accepted",
             "job_id": indexing_job.job_id,
-            "message": "PR review initiated",
-            "review_id": review_summary.review_id,
+            "message": "PR review initiated in background",
+            "pr_id": pr_id,
         }
 
     async def get_pr_review(
@@ -877,6 +993,13 @@ def _owner_from_full_name(full_name: str) -> str:
     if "/" in full_name:
         owner, *_ = full_name.split("/", 1)
         return owner or full_name
+    return full_name
+
+
+def _repo_from_full_name(full_name: str) -> str:
+    if "/" in full_name:
+        _, repo = full_name.split("/", 1)
+        return repo
     return full_name
 
 

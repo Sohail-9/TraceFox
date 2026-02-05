@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import json
 import logging
 import time
@@ -10,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import httpx
+import jwt
 
 from services.shared.config import ConfigurationError, get_settings
 from services.shared.models import Finding
@@ -55,7 +53,7 @@ class GitHubPublisher:
     def enabled(self) -> bool:
         return self._enabled
 
-    def publish(
+    async def publish(
         self,
         *,
         repo_url: str,
@@ -63,6 +61,7 @@ class GitHubPublisher:
         head_sha: Optional[str],
         findings: List[Finding],
         summary_text: str,
+        is_summary_only: bool = False,
     ) -> None:
         if not self._enabled:
             logger.debug("GitHub publishing disabled; skipping")
@@ -74,12 +73,16 @@ class GitHubPublisher:
             return
 
         try:
+            if is_summary_only:
+                await self._post_pr_comment(owner, repo, pr_number, summary_text)
+                return
+
             comments = self._build_inline_comments(findings)
             if comments:
-                self._create_review(owner, repo, pr_number, summary_text, comments)
+                await self._create_review(owner, repo, pr_number, summary_text, comments)
             if head_sha:
                 # Optional check run summary
-                self._create_check_run(owner, repo, head_sha, title="TraceFox Review", summary=summary_text)
+                await self._create_check_run(owner, repo, head_sha, title="TraceFox Review", summary=summary_text)
         except Exception as exc:  # pragma: no cover - network/hard failure path
             logger.error("GitHub publish failed: %s", exc, exc_info=True)
 
@@ -126,13 +129,83 @@ class GitHubPublisher:
         lines.append(f"Confidence: {confidence:.2f}")
         return "\n".join(lines)
 
-    def _headers(self) -> Mapping[str, str]:
+    async def _get_auth_headers(self, owner: str, repo: str) -> Mapping[str, str]:
         headers = {"Accept": "application/vnd.github+json"}
         if self._auth.token:
             headers["Authorization"] = f"Bearer {self._auth.token}"
+            return headers
+
+        if self._auth.app_id and self._auth.private_key_pem:
+            token = await self._get_installation_token(owner, repo)
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
         return headers
 
-    def _create_review(
+    def _generate_jwt(self) -> str:
+        if not self._auth.app_id or not self._auth.private_key_pem:
+            return ""
+        now = int(time.time())
+        payload = {
+            "iat": now - 60,
+            "exp": now + (10 * 60),
+            "iss": self._auth.app_id,
+        }
+        return jwt.encode(payload, self._auth.private_key_pem, algorithm="RS256")
+
+    async def _get_installation_token(self, owner: str, repo: str) -> Optional[str]:
+        jwt_token = self._generate_jwt()
+        if not jwt_token:
+            return None
+
+        installation_url = f"{self._auth.api_base}/repos/{owner}/{repo}/installation"
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(installation_url, headers={"Authorization": f"Bearer {jwt_token}", "Accept": "application/vnd.github+json"})
+            if resp.status_code != 200:
+                logger.warning("Failed to get installation for %s/%s: %s", owner, repo, resp.status_code)
+                return None
+            installation_id = resp.json().get("id")
+
+            access_token_url = f"{self._auth.api_base}/app/installations/{installation_id}/access_tokens"
+            resp = await client.post(access_token_url, headers={"Authorization": f"Bearer {jwt_token}", "Accept": "application/vnd.github+json"})
+            if resp.status_code != 201:
+                logger.warning("Failed to get access token: %s", resp.status_code)
+                return None
+            return resp.json().get("token")
+
+    async def update_comment(self, owner: str, repo: str, comment_id: int, body: str) -> None:
+        """Update an existing comment body."""
+        url = f"{self._auth.api_base}/repos/{owner}/{repo}/issues/comments/{comment_id}"
+        payload = {"body": body}
+        await self._post(url, json=payload, owner=owner, repo=repo, method="PATCH")
+
+    async def _post_pr_comment(self, owner: str, repo: str, pr_number: int, body: str) -> int:
+        """Post a comment and return its ID."""
+        url = f"{self._auth.api_base}/repos/{owner}/{repo}/issues/{pr_number}/comments"
+        payload = {"body": body}
+        resp = await self._post(url, json=payload, owner=owner, repo=repo)
+        if resp and "id" in resp:
+            return int(resp["id"])
+        return 0
+
+    async def post_reply(
+        self,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        comment_id: int,
+        body: str,
+    ) -> None:
+        """Post a reply to an existing PR comment thread."""
+        if not self._enabled:
+            return
+
+        # PR replies (review comments) use a specific nested endpoint
+        url = f"{self._auth.api_base}/repos/{owner}/{repo}/pulls/{pr_number}/comments/{comment_id}/replies"
+        payload = {"body": body}
+        await self._post(url, json=payload, owner=owner, repo=repo)
+
+
+    async def _create_review(
         self,
         owner: str,
         repo: str,
@@ -142,9 +215,9 @@ class GitHubPublisher:
     ) -> None:
         url = f"{self._auth.api_base}/repos/{owner}/{repo}/pulls/{pr_number}/reviews"
         payload = {"event": "COMMENT", "body": summary, "comments": comments}
-        self._post(url, json=payload)
+        await self._post(url, json=payload, owner=owner, repo=repo)
 
-    def _create_check_run(self, owner: str, repo: str, head_sha: str, *, title: str, summary: str) -> None:
+    async def _create_check_run(self, owner: str, repo: str, head_sha: str, *, title: str, summary: str) -> None:
         url = f"{self._auth.api_base}/repos/{owner}/{repo}/check-runs"
         payload = {
             "name": "TraceFox Review",
@@ -153,16 +226,32 @@ class GitHubPublisher:
             "conclusion": "neutral",
             "output": {"title": title, "summary": summary},
         }
-        self._post(url, json=payload)
+        await self._post(url, json=payload, owner=owner, repo=repo)
 
-    def _post(self, url: str, *, json: Mapping[str, Any]) -> None:
+    async def _post(
+        self,
+        url: str,
+        *,
+        json: Mapping[str, Any],
+        owner: Optional[str] = None,
+        repo: Optional[str] = None,
+        method: str = "POST",
+    ) -> Optional[Dict[str, Any]]:
         try:
-            with httpx.Client(timeout=10) as client:
-                resp = client.post(url, headers=self._headers(), json=json)
+            headers = await self._get_auth_headers(owner or "", repo or "")
+            async with httpx.AsyncClient(timeout=10) as client:
+                if method == "PATCH":
+                    resp = await client.patch(url, headers=headers, json=json)
+                else:
+                    resp = await client.post(url, headers=headers, json=json)
+                
                 if resp.status_code >= 400:
                     logger.warning("GitHub API %s failed: %s %s", url, resp.status_code, resp.text[:300])
+                    return None
+                return resp.json()
         except Exception as exc:  # pragma: no cover
             logger.warning("GitHub API call error: %s", exc)
+            return None
 
 
 publisher = GitHubPublisher()

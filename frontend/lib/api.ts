@@ -93,5 +93,6 @@ export async function postJson<T>(path: string, body: unknown, options?: Request
 export const initiateGitHubLogin = async () => {
   const challenge = await fetchJson<GitHubLoginChallenge>("/auth/github/login");
   rememberOAuthState(challenge.state);
+
   window.location.href = challenge.authorization_url;
 };

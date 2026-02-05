@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -70,11 +70,14 @@ class PullRequestInfo(BaseModel):
 
 
 class WebhookPayload(BaseModel):
-    event_type: str
+    event_type: str = "pull_request"
     action: str
     repository: RepositoryInfo
     pull_request: PullRequestInfo
     files: List[FilePayload] = Field(default_factory=list)
+    comment: Optional[str] = None
+    comment_id: Optional[int] = None
+    in_reply_to_id: Optional[int] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -95,9 +98,9 @@ class Finding(BaseModel):
     line_number: int = 0
     suggested_fix: Optional[str] = None
     impact: Optional[str] = None
-    source_model: FindingSource | str = FindingSource.llama
+    source_model: Union[FindingSource, str] = FindingSource.llama
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    classification: FindingPriority | str | None = None
+    classification: Optional[Union[FindingPriority, str]] = None
     remediation: Optional[str] = None
     code_diff: Optional[str] = None
 
